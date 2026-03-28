@@ -1,0 +1,33 @@
+nano .gitignore
+```
+
+Paste this:
+```
+# Dependencies
+node_modules/
+frontend/node_modules/
+solana-contract/node_modules/
+
+# Build outputs
+frontend/.next/
+solana-contract/target/
+solana-contract/.anchor/
+
+# Environment files (contains secrets)
+frontend/.env.local
+.env.local
+.env
+
+# Solana keypairs (NEVER push these)
+*.json.bak
+id.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db

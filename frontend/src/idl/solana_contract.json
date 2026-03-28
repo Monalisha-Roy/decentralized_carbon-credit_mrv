@@ -1,0 +1,508 @@
+{
+  "address": "3r12bmzVY7xhree24XEgyeKTymfZr1Lrd1jzZ9AHkWzY",
+  "metadata": {
+    "name": "solana_contract",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "calculate_and_mint",
+      "discriminator": [
+        190,
+        172,
+        203,
+        251,
+        107,
+        205,
+        152,
+        36
+      ],
+      "accounts": [
+        {
+          "name": "platform_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "land_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "land_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "carbon_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  98,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "land_id"
+              },
+              {
+                "kind": "arg",
+                "path": "year"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner_token_account",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "land_id",
+          "type": "string"
+        },
+        {
+          "name": "year",
+          "type": "u16"
+        },
+        {
+          "name": "agb_density",
+          "type": "f64"
+        },
+        {
+          "name": "bgb_density",
+          "type": "f64"
+        },
+        {
+          "name": "soc_density",
+          "type": "f64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_platform",
+      "discriminator": [
+        119,
+        201,
+        101,
+        45,
+        75,
+        122,
+        89,
+        3
+      ],
+      "accounts": [
+        {
+          "name": "platform_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "register_land",
+      "discriminator": [
+        19,
+        138,
+        95,
+        50,
+        179,
+        68,
+        57,
+        239
+      ],
+      "accounts": [
+        {
+          "name": "land_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "land_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "land_id",
+          "type": "string"
+        },
+        {
+          "name": "ipfs_cid",
+          "type": "string"
+        },
+        {
+          "name": "area_hectares",
+          "type": "f64"
+        }
+      ]
+    },
+    {
+      "name": "verify_land",
+      "discriminator": [
+        205,
+        213,
+        6,
+        56,
+        127,
+        178,
+        195,
+        75
+      ],
+      "accounts": [
+        {
+          "name": "platform_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "land_record",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "CarbonRecord",
+      "discriminator": [
+        236,
+        240,
+        195,
+        199,
+        223,
+        7,
+        79,
+        150
+      ]
+    },
+    {
+      "name": "LandRecord",
+      "discriminator": [
+        113,
+        233,
+        230,
+        248,
+        150,
+        33,
+        225,
+        160
+      ]
+    },
+    {
+      "name": "PlatformState",
+      "discriminator": [
+        160,
+        10,
+        182,
+        134,
+        98,
+        122,
+        78,
+        239
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Unauthorized: only platform authority can perform this action"
+    },
+    {
+      "code": 6001,
+      "name": "LandIdTooLong",
+      "msg": "Land ID exceeds maximum length of 64 characters"
+    },
+    {
+      "code": 6002,
+      "name": "CidTooLong",
+      "msg": "IPFS CID exceeds maximum length of 128 characters"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidArea",
+      "msg": "Area must be greater than 0"
+    },
+    {
+      "code": 6004,
+      "name": "LandNotVerified",
+      "msg": "Land is not verified yet"
+    },
+    {
+      "code": 6005,
+      "name": "AlreadyVerified",
+      "msg": "Already verified"
+    },
+    {
+      "code": 6006,
+      "name": "TooSoon",
+      "msg": "Minimum 1 year gap required between calculations"
+    }
+  ],
+  "types": [
+    {
+      "name": "CarbonRecord",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "land_id",
+            "type": "string"
+          },
+          {
+            "name": "year",
+            "type": "u16"
+          },
+          {
+            "name": "agb_density",
+            "type": "f64"
+          },
+          {
+            "name": "bgb_density",
+            "type": "f64"
+          },
+          {
+            "name": "soc_density",
+            "type": "f64"
+          },
+          {
+            "name": "total_density",
+            "type": "f64"
+          },
+          {
+            "name": "carbon_stock",
+            "type": "f64"
+          },
+          {
+            "name": "credits_minted",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LandRecord",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "land_id",
+            "type": "string"
+          },
+          {
+            "name": "ipfs_cid",
+            "type": "string"
+          },
+          {
+            "name": "area_hectares",
+            "type": "f64"
+          },
+          {
+            "name": "is_verified",
+            "type": "bool"
+          },
+          {
+            "name": "last_calculated_year",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PlatformState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}
