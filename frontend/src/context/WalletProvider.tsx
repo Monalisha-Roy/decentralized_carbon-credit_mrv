@@ -13,7 +13,7 @@ interface Props {
 }
 
 export const SolanaWalletProvider: FC<Props> = ({ children }) => {
-  const endpoint = useMemo(() => clusterApiUrl("devnet"), []);
+  const endpoint = useMemo(() => "https://api.devnet.solana.com", []);
 
   // Empty array — Standard Wallets like Phantom register themselves automatically
   const wallets = useMemo(() => [], []);

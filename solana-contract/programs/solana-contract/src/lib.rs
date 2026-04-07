@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
-declare_id!("3r12bmzVY7xhree24XEgyeKTymfZr1Lrd1jzZ9AHkWzY");
+declare_id!("7qpxvaW7T37SYE3BubL56zgzWRJqf4w575y5ZaHPo36d");
 
 #[program]
 pub mod solana_contract {
@@ -32,6 +32,8 @@ pub mod solana_contract {
         land.ipfs_cid = ipfs_cid;
         land.area_hectares = area_hectares;
         land.is_verified = false;
+        land.is_declined = false;
+        land.rejection_reason = String::new();
         land.last_calculated_year = 0;
         land.bump = ctx.bumps.land_record;
 
@@ -53,6 +55,24 @@ pub mod solana_contract {
         Ok(())                                            // ← was missing!
     }
 
+    pub fn decline_land(ctx: Context<DeclineLand>, reason: String) -> Result<()> {
+    require!(
+        ctx.accounts.authority.key() == ctx.accounts.platform_state.authority,
+        ErrorCode::Unauthorized
+    );
+    require!(reason.len() <= 128, ErrorCode::ReasonTooLong);
+
+    let land = &mut ctx.accounts.land_record;
+    require!(!land.is_verified, ErrorCode::AlreadyVerified);
+    require!(!land.is_declined, ErrorCode::AlreadyDeclined);
+
+    land.is_declined = true;
+    land.rejection_reason = reason.clone();
+
+    msg!("Land {} declined. Reason: {}", land.land_id, reason);
+    Ok(())
+}
+
     pub fn calculate_and_mint(
         ctx: Context<CalculateAndMint>,
         land_id: String,
@@ -68,6 +88,7 @@ pub mod solana_contract {
 
         let land = &mut ctx.accounts.land_record;
         require!(land.is_verified, ErrorCode::LandNotVerified);
+        require!(!land.is_declined, ErrorCode::LandDeclined);
 
         if land.last_calculated_year != 0 {
             require!(year > land.last_calculated_year, ErrorCode::TooSoon);
@@ -123,12 +144,14 @@ pub struct PlatformState {
 
 #[account]
 pub struct LandRecord {
-    pub owner: Pubkey,
-    pub land_id: String,
+    pub owner: Pubkey,              
+    pub land_id: String,  
     pub ipfs_cid: String,
     pub area_hectares: f64,
-    pub is_verified: bool,
-    pub last_calculated_year: u16,
+    pub is_verified: bool,   
+    pub is_declined: bool, 
+    pub rejection_reason: String,
+    pub last_calculated_year: u16, 
     pub bump: u8,
 }
 
@@ -180,7 +203,7 @@ pub struct RegisterLand<'info> {
     #[account(
         init,
         payer = owner,
-        space = 8 + 32 + (4 + 64) + (4 + 128) + 8 + 1 + 2 + 1,
+        space = 8 + 32 + (4 + 64) + (4 + 128) + 8 + 1 + 1 + (4 + 128) + 2 + 1,
         seeds = [b"land", land_id.as_bytes()],
         bump
     )]
@@ -193,6 +216,17 @@ pub struct RegisterLand<'info> {
 
 #[derive(Accounts)]
 pub struct VerifyLand<'info> {
+    #[account(seeds = [b"platform"], bump = platform_state.bump)]
+    pub platform_state: Account<'info, PlatformState>,
+
+    #[account(mut)]
+    pub land_record: Account<'info, LandRecord>,
+
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct DeclineLand<'info> {
     #[account(seeds = [b"platform"], bump = platform_state.bump)]
     pub platform_state: Account<'info, PlatformState>,
 
@@ -256,4 +290,10 @@ pub enum ErrorCode {
     AlreadyVerified,
     #[msg("Minimum 1 year gap required between calculations")]
     TooSoon,
+    #[msg("Already declined")]
+    AlreadyDeclined,
+    #[msg("Rejection reason exceeds maximum length of 128 characters")]
+    ReasonTooLong,
+    #[msg("Land registration was declined")]
+    LandDeclined,
 }

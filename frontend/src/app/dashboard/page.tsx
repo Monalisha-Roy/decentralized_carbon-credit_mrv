@@ -14,6 +14,8 @@ interface LandRecord {
   ipfsCid: string;
   areaHectares: number;
   isVerified: boolean;
+  isDeclined: boolean;        
+  rejectionReason: string;
   lastCalculatedYear: number;
 }
 
@@ -46,6 +48,7 @@ export default function DashboardPage() {
 
     try {
       // Fetch all land records owned by this wallet
+      // @ts-ignore
       const allLands = await program.account.landRecord.all([
         {
           memcmp: {
@@ -61,11 +64,14 @@ export default function DashboardPage() {
         ipfsCid: l.account.ipfsCid,
         areaHectares: l.account.areaHectares,
         isVerified: l.account.isVerified,
+        isDeclined: l.account.isDeclined,           // add this
+        rejectionReason: l.account.rejectionReason, // add this
         lastCalculatedYear: l.account.lastCalculatedYear,
       }));
       setLands(formatted);
 
       // Fetch all carbon records
+      // @ts-ignore
       const allCarbon = await program.account.carbonRecord.all();
       const formattedCarbon: CarbonRecord[] = allCarbon
         .filter((c: any) =>
@@ -119,12 +125,12 @@ export default function DashboardPage() {
 
   if (!connected) {
     return (
-      <div className="flex items-center justify-center min-h-[80vh]">
+      <div className="min-h-screen flex items-center justify-center px-4">
         <div className="text-center">
-          <p className="text-2xl font-semibold text-gray-600 mb-2">
+          <p className="text-2xl font-semibold text-gray-700 mb-2">
             Connect your wallet
           </p>
-          <p className="text-gray-400">
+          <p className="text-gray-500">
             Connect your Phantom wallet to view your dashboard
           </p>
         </div>
@@ -133,186 +139,217 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-green-800">My Dashboard</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {publicKey?.toBase58().slice(0, 16)}...
-          </p>
-        </div>
-        <button
-          onClick={fetchDashboard}
-          disabled={loading}
-          className="bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition text-sm disabled:opacity-50"
-        >
-          {loading ? "Loading..." : "🔄 Refresh"}
-        </button>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        <div className="bg-white rounded-xl shadow border border-gray-100 p-5">
-          <div className="text-2xl mb-1">🗺️</div>
-          <div className="text-3xl font-bold text-gray-800">{lands.length}</div>
-          <div className="text-sm text-gray-500 mt-1">Registered Plots</div>
-        </div>
-        <div className="bg-white rounded-xl shadow border border-gray-100 p-5">
-          <div className="text-2xl mb-1">✅</div>
-          <div className="text-3xl font-bold text-gray-800">
-            {lands.filter((l) => l.isVerified).length}
+    <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-gray-900">My Dashboard</h1>
+            <p className="text-gray-600 text-sm mt-2 break-all">
+              Wallet: {publicKey?.toBase58().slice(0, 16)}...
+            </p>
           </div>
-          <div className="text-sm text-gray-500 mt-1">Verified Plots</div>
-        </div>
-        <div className="bg-white rounded-xl shadow border border-gray-100 p-5">
-          <div className="text-2xl mb-1">🪙</div>
-          <div className="text-3xl font-bold text-green-700">{tokenBalance}</div>
-          <div className="text-sm text-gray-500 mt-1">Carbon Credits Balance</div>
-        </div>
-      </div>
-
-      {/* Land Plots */}
-      <h2 className="text-xl font-semibold text-gray-700 mb-3">
-        Your Land Plots
-      </h2>
-      {loading ? (
-        <div className="p-8 text-center text-gray-400">Loading...</div>
-      ) : lands.length === 0 ? (
-        <div className="bg-white rounded-xl shadow border border-gray-100 p-8 text-center">
-          <p className="text-gray-400 mb-3">No land plots registered yet.</p>
-          <a
-            href="/register"
-            className="bg-green-700 text-white px-6 py-2 rounded-lg hover:bg-green-600 transition text-sm font-medium"
+          <button
+            onClick={fetchDashboard}
+            disabled={loading}
+            className="w-full sm:w-auto bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Register Your First Plot →
-          </a>
+            {loading ? "⏳ Loading..." : "🔄 Refresh"}
+          </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 mb-8">
-          {lands.map((land) => {
-            const landCarbon = carbonRecords.filter(
-              (c) => c.landId === land.landId
-            );
-            const totalCredits = landCarbon.reduce(
-              (sum, c) => sum + c.creditsMinted,
-              0
-            );
-            const canCalculate =
-              land.isVerified &&
-              (land.lastCalculatedYear === 0 ||
-                new Date().getFullYear() > land.lastCalculatedYear);
 
-            return (
-              <div
-                key={land.landId}
-                className="bg-white rounded-xl shadow border border-gray-100 p-5"
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+            <div className="text-4xl mb-3">🗺️</div>
+            <div className="text-4xl font-bold text-gray-900">{lands.length}</div>
+            <div className="text-gray-600 text-sm mt-2">Registered Plots</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition">
+            <div className="text-4xl mb-3">✅</div>
+            <div className="text-4xl font-bold text-green-600">
+              {lands.filter((l) => l.isVerified).length}
+            </div>
+            <div className="text-gray-600 text-sm mt-2">Verified Plots</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition sm:col-span-2 lg:col-span-1">
+            <div className="text-4xl mb-3">🪙</div>
+            <div className="text-4xl font-bold text-green-700">{tokenBalance.toLocaleString()}</div>
+            <div className="text-gray-600 text-sm mt-2">Carbon Credits Balance</div>
+          </div>
+        </div>
+
+        {/* Land Plots Section */}
+        <div>
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-gray-900">Your Land Plots</h2>
+            <Link
+              href="/register"
+              className="text-green-600 hover:text-green-700 font-semibold text-sm"
+            >
+              + Add New Plot
+            </Link>
+          </div>
+
+          {loading ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+              <p className="text-gray-400">⏳ Loading your land plots...</p>
+            </div>
+          ) : lands.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 sm:p-12 text-center">
+              <div className="text-5xl mb-4">🌍</div>
+              <p className="text-gray-600 mb-6 text-lg">No land plots registered yet.</p>
+              <Link
+                href="/register"
+                className="inline-block bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition font-semibold"
               >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-mono text-sm text-gray-700 font-semibold">
-                        {land.landId}
-                      </span>
-                      {land.isVerified ? (
-                        <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs font-medium">
-                          ✅ Verified
-                        </span>
-                      ) : (
-                        <span className="bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full text-xs font-medium">
-                          ⏳ Pending Verification
-                        </span>
+                Register Your First Plot →
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {lands.map((land) => {
+                const landCarbon = carbonRecords.filter(
+                  (c) => c.landId === land.landId
+                );
+                const totalCredits = landCarbon.reduce(
+                  (sum, c) => sum + c.creditsMinted,
+                  0
+                );
+                const canCalculate =
+                  land.isVerified &&
+                  (land.lastCalculatedYear === 0 ||
+                    new Date().getFullYear() > land.lastCalculatedYear);
+
+                return (
+                  <div
+                    key={land.landId}
+                    className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition overflow-hidden"
+                  >
+                    {/* Card Header */}
+                    <div className="p-6 border-b border-gray-100">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="flex items-center gap-3 mb-2 flex-wrap">
+                            <span className="font-mono text-sm font-semibold text-gray-700 bg-gray-100 px-3 py-1 rounded">
+                              {land.landId}
+                            </span>
+                            {land.isVerified ? (
+                            <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-semibold">
+                              ✅ Verified
+                            </span>
+                          ) : land.isDeclined ? (
+                            <span className="inline-flex items-center gap-1 bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-semibold">
+                              ❌ Declined
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-semibold">
+                              ⏳ Pending
+                            </span>
+                          )}
+                          {land.isDeclined && land.rejectionReason && (
+                            <p className="text-xs text-red-500 mt-1">Reason: {land.rejectionReason}</p>
+                          )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() =>
+                            setSelectedLand(
+                              selectedLand?.landId === land.landId ? null : land
+                            )
+                          }
+                          className="text-sm font-medium text-gray-600 hover:text-gray-900 transition"
+                        >
+                          {selectedLand?.landId === land.landId
+                            ? "▼ Hide Details"
+                            : "▶ View Details"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Card Stats */}
+                    <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-white">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                        <div>
+                          <div className="text-gray-600 text-xs uppercase tracking-wide font-semibold">Area</div>
+                          <div className="text-2xl font-bold text-gray-900 mt-1">{land.areaHectares.toFixed(1)}</div>
+                          <div className="text-gray-500 text-xs">hectares</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600 text-xs uppercase tracking-wide font-semibold">Last Calculated</div>
+                          <div className="text-2xl font-bold text-gray-900 mt-1">
+                            {land.lastCalculatedYear === 0 ? "—" : land.lastCalculatedYear}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600 text-xs uppercase tracking-wide font-semibold">Credits</div>
+                          <div className="text-2xl font-bold text-green-600 mt-1">{totalCredits}</div>
+                          <div className="text-gray-500 text-xs">earned</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card Actions */}
+                    <div className="px-6 py-3 flex flex-col sm:flex-row gap-2 border-t border-gray-100 bg-gray-50">
+                      <Link
+                        href={`https://ipfs.io/ipfs/${land.ipfsCid}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 text-center text-blue-600 hover:text-blue-700 font-medium text-sm py-2 rounded hover:bg-blue-50 transition"
+                      >
+                        📄 View Document
+                      </Link>
+                      {canCalculate && (
+                        <button className="flex-1 bg-green-600 text-white font-medium text-sm py-2 rounded hover:bg-green-700 transition">
+                          📊 Calculate Credits
+                        </button>
                       )}
                     </div>
-                    <div className="text-sm text-gray-500 grid grid-cols-3 gap-4 mt-2">
-                      <span>📐 {land.areaHectares.toFixed(2)} ha</span>
-                      <span>
-                        📅 Last calc:{" "}
-                        {land.lastCalculatedYear === 0
-                          ? "Never"
-                          : land.lastCalculatedYear}
-                      </span>
-                      <span>🪙 {totalCredits} credits earned</span>
-                    </div>
-                    <Link
-                      href={`https://ipfs.io/ipfs/${land.ipfsCid}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-blue-500 underline mt-2 inline-block"
-                    >
-                      View Land Document →
-                    </Link>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() =>
-                        setSelectedLand(
-                          selectedLand?.landId === land.landId ? null : land
-                        )
-                      }
-                      className="text-sm text-gray-500 border border-gray-200 px-3 py-1 rounded-lg hover:bg-gray-50"
-                    >
-                      {selectedLand?.landId === land.landId
-                        ? "Hide History"
-                        : "View History"}
-                    </button>
-                    {canCalculate && (
-                      <button className="bg-green-600 text-white text-sm px-4 py-1 rounded-lg hover:bg-green-500 transition">
-                        Calculate Credits →
-                      </button>
-                    )}
-                    {!land.isVerified && (
-                      <span className="text-xs text-gray-400 self-center">
-                        Awaiting admin verification
-                      </span>
-                    )}
-                  </div>
-                </div>
 
-                {/* Carbon History */}
-                {selectedLand?.landId === land.landId &&
-                  landCarbon.length > 0 && (
-                    <div className="mt-4 border-t border-gray-100 pt-4">
-                      <h4 className="text-sm font-semibold text-gray-600 mb-2">
-                        Carbon Calculation History
-                      </h4>
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="text-gray-400">
-                            <th className="text-left py-1">Year</th>
-                            <th className="text-left py-1">AGB (t/ha)</th>
-                            <th className="text-left py-1">BGB (t/ha)</th>
-                            <th className="text-left py-1">SOC (t/ha)</th>
-                            <th className="text-left py-1">Carbon Stock</th>
-                            <th className="text-left py-1">Credits</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {landCarbon.map((c) => (
-                            <tr
-                              key={c.year}
-                              className="border-t border-gray-50"
-                            >
-                              <td className="py-1">{c.year}</td>
-                              <td className="py-1">{c.agbDensity}</td>
-                              <td className="py-1">{c.bgbDensity}</td>
-                              <td className="py-1">{c.socDensity}</td>
-                              <td className="py-1">
-                                {c.carbonStock.toFixed(2)} t
-                              </td>
-                              <td className="py-1 font-semibold text-green-600">
-                                {c.creditsMinted}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-              </div>
-            );
-          })}
+                    {/* Carbon History */}
+                    {selectedLand?.landId === land.landId && landCarbon.length > 0 && (
+                      <div className="px-6 py-4 bg-gray-50 border-t border-gray-100">
+                        <h4 className="font-semibold text-gray-900 mb-4">Carbon History</h4>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs text-gray-700">
+                            <thead>
+                              <tr className="text-gray-500 border-b border-gray-200">
+                                <th className="text-left py-2 px-2 font-semibold">Year</th>
+                                <th className="text-left py-2 px-2 font-semibold">AGB</th>
+                                <th className="text-left py-2 px-2 font-semibold">BGB</th>
+                                <th className="text-left py-2 px-2 font-semibold">SOC</th>
+                                <th className="text-right py-2 px-2 font-semibold">Credits</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {landCarbon.map((c, idx) => (
+                                <tr
+                                  key={c.year}
+                                  className={`border-b border-gray-100 ${
+                                    idx % 2 === 0 ? "bg-white" : "bg-gray-100"
+                                  }`}
+                                >
+                                  <td className="py-2 px-2">{c.year}</td>
+                                  <td className="py-2 px-2">{c.agbDensity.toFixed(1)}</td>
+                                  <td className="py-2 px-2">{c.bgbDensity.toFixed(1)}</td>
+                                  <td className="py-2 px-2">{c.socDensity.toFixed(1)}</td>
+                                  <td className="py-2 px-2 text-right font-semibold text-green-600">
+                                    {c.creditsMinted}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

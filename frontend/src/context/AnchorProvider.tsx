@@ -6,7 +6,7 @@ import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import idl from "@/idl/solana_contract.json";
 
-const PROGRAM_ID = new PublicKey("3r12bmzVY7xhree24XEgyeKTymfZr1Lrd1jzZ9AHkWzY");
+const PROGRAM_ID = new PublicKey("7qpxvaW7T37SYE3BubL56zgzWRJqf4w575y5ZaHPo36d");
 
 interface AnchorContextType {
   program: Program | null;
@@ -29,6 +29,8 @@ export const AnchorContextProvider: FC<{ children: ReactNode }> = ({
 
     const provider = new AnchorProvider(connection, wallet as any, {
       commitment: "confirmed",
+      preflightCommitment: "confirmed",
+      skipPreflight: false,
     });
 
     const program = new Program(idl as Idl, provider);

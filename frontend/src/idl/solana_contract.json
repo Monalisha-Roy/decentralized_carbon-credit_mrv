@@ -1,5 +1,5 @@
 {
-  "address": "3r12bmzVY7xhree24XEgyeKTymfZr1Lrd1jzZ9AHkWzY",
+  "address": "7qpxvaW7T37SYE3BubL56zgzWRJqf4w575y5ZaHPo36d",
   "metadata": {
     "name": "solana_contract",
     "version": "0.1.0",
@@ -143,6 +143,55 @@
         {
           "name": "soc_density",
           "type": "f64"
+        }
+      ]
+    },
+    {
+      "name": "decline_land",
+      "discriminator": [
+        27,
+        229,
+        107,
+        151,
+        201,
+        143,
+        196,
+        95
+      ],
+      "accounts": [
+        {
+          "name": "platform_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "land_record",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "reason",
+          "type": "string"
         }
       ]
     },
@@ -397,6 +446,21 @@
       "code": 6006,
       "name": "TooSoon",
       "msg": "Minimum 1 year gap required between calculations"
+    },
+    {
+      "code": 6007,
+      "name": "AlreadyDeclined",
+      "msg": "Already declined"
+    },
+    {
+      "code": 6008,
+      "name": "ReasonTooLong",
+      "msg": "Rejection reason exceeds maximum length of 128 characters"
+    },
+    {
+      "code": 6009,
+      "name": "LandDeclined",
+      "msg": "Land registration was declined"
     }
   ],
   "types": [
@@ -472,6 +536,14 @@
           {
             "name": "is_verified",
             "type": "bool"
+          },
+          {
+            "name": "is_declined",
+            "type": "bool"
+          },
+          {
+            "name": "rejection_reason",
+            "type": "string"
           },
           {
             "name": "last_calculated_year",

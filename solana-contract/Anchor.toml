@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-solana_contract = "3r12bmzVY7xhree24XEgyeKTymfZr1Lrd1jzZ9AHkWzY"
+solana_contract = "7qpxvaW7T37SYE3BubL56zgzWRJqf4w575y5ZaHPo36d"
 
 [registry]
 url = "https://api.apr.dev"

@@ -14,13 +14,15 @@ interface LandRecord {
   ipfsCid: string;
   areaHectares: number;
   isVerified: boolean;
+  isDeclined: boolean;
+  rejectionReason: string;
   lastCalculatedYear: number;
 }
-
 interface PlatformStats {
   totalLands: number;
   verifiedLands: number;
   pendingLands: number;
+  declinedLands: number;
   totalCredits: number;
 }
 
@@ -33,19 +35,57 @@ export default function AuthorityPage() {
     totalLands: 0,
     verifiedLands: 0,
     pendingLands: 0,
+    declinedLands: 0,
     totalCredits: 0,
   });
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<"pending" | "verified" | "all">("pending");
+  const [activeTab, setActiveTab] = useState<"pending" | "verified" | "declined" | "all">("pending");
 
   const isAuthority = publicKey?.toBase58() === AUTHORITY_PUBKEY;
+
+  const initializePlatform = async () => {
+    if (!program || !publicKey) return;
+    setLoading(true);
+    setStatus("");
+
+    try {
+      const [platformStatePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("platform")],
+        program.programId
+      );
+
+      const [tokenMintPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("mint")],
+        program.programId
+      );
+
+      const tx = await program.methods
+        .initializePlatform()
+        // @ts-ignore
+        .accounts({
+          platformState: platformStatePda,
+          tokenMint: tokenMintPda,
+          authority: publicKey,
+        })
+        .rpc();
+
+      setStatus(`✅ Platform initialized! Tx: ${tx}`);
+      await fetchAllLands();
+    } catch (e: any) {
+      console.error(e);
+      setStatus(`❌ Error initializing platform: ${e.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchAllLands = async () => {
     if (!program) return;
     setLoading(true);
     try {
+      // @ts-ignore
       const allLands = await program.account.landRecord.all();
       const formatted: LandRecord[] = allLands.map((l: any) => ({
         publicKey: l.publicKey.toBase58(),
@@ -54,6 +94,8 @@ export default function AuthorityPage() {
         ipfsCid: l.account.ipfsCid,
         areaHectares: l.account.areaHectares,
         isVerified: l.account.isVerified,
+        isDeclined: l.account.isDeclined,
+        rejectionReason: l.account.rejectionReason,
         lastCalculatedYear: l.account.lastCalculatedYear,
       }));
 
@@ -61,8 +103,9 @@ export default function AuthorityPage() {
       setStats({
         totalLands: formatted.length,
         verifiedLands: formatted.filter((l) => l.isVerified).length,
-        pendingLands: formatted.filter((l) => !l.isVerified).length,
-        totalCredits: 0, // will add later
+        pendingLands: formatted.filter((l) => !l.isVerified && !l.isDeclined).length,
+        declinedLands: formatted.filter((l) => l.isDeclined).length,
+        totalCredits: 0,
       });
     } catch (e: any) {
       console.error(e);
@@ -72,12 +115,46 @@ export default function AuthorityPage() {
     }
   };
 
+  const checkAndInitializePlatform = async (): Promise<boolean> => {
+    if (!program) return false;
+    
+    try {
+      const [platformStatePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("platform")],
+        program.programId
+      );
+
+      // Try to fetch the platform state account
+      try {
+        // @ts-ignore
+        await program.account.platformState.fetch(platformStatePda);
+        return true; // Platform is already initialized
+      } catch {
+        // Platform not initialized, initialize it
+        setStatus("⏳ Initializing platform... Please wait");
+        await initializePlatform();
+        return true;
+      }
+    } catch (e: any) {
+      console.error("Error checking platform:", e);
+      return false;
+    }
+  };
+
   const handleVerify = async (land: LandRecord) => {
     if (!program || !publicKey) return;
     setVerifying(land.landId);
     setStatus("");
 
     try {
+      // Check if platform is initialized, initialize if needed
+      const platformReady = await checkAndInitializePlatform();
+      if (!platformReady) {
+        setStatus("❌ Failed to initialize platform");
+        setVerifying(null);
+        return;
+      }
+
       const [platformStatePda] = PublicKey.findProgramAddressSync(
         [Buffer.from("platform")],
         program.programId
@@ -107,6 +184,55 @@ export default function AuthorityPage() {
     }
   };
 
+  const handleDecline = async (land: LandRecord) => {
+    if (!program || !publicKey) return;
+    const reason = prompt("Enter reason for declining this land registration:");
+    if (!reason || reason.trim() === "") {
+      setStatus("❌ Please provide a reason for declining.");
+      return;
+    }
+
+    setVerifying(land.landId);
+    setStatus("");
+
+    try {
+      // Check if platform is initialized, initialize if needed
+      const platformReady = await checkAndInitializePlatform();
+      if (!platformReady) {
+        setStatus("❌ Failed to initialize platform");
+        setVerifying(null);
+        return;
+      }
+
+      const [platformStatePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("platform")],
+        program.programId
+      );
+
+      const [landRecordPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("land"), Buffer.from(land.landId)],
+        program.programId
+      );
+
+      const tx = await program.methods
+        .declineLand(reason)
+        .accounts({
+          platformState: platformStatePda,
+          landRecord: landRecordPda,
+          authority: publicKey,
+        })
+        .rpc();
+
+      setStatus(`❌ Land ${land.landId} declined. Tx: ${tx}`);
+      await fetchAllLands();
+    } catch (e: any) {
+      console.error(e);
+      setStatus(`❌ Error: ${e.message}`);
+    } finally {
+      setVerifying(null);
+    }
+  };
+
   useEffect(() => {
     if (program && isAuthority) {
       fetchAllLands();
@@ -114,8 +240,9 @@ export default function AuthorityPage() {
   }, [program, isAuthority]);
 
   const filteredLands = lands.filter((l) => {
-    if (activeTab === "pending") return !l.isVerified;
+    if (activeTab === "pending") return !l.isVerified && !l.isDeclined;
     if (activeTab === "verified") return l.isVerified;
+    if (activeTab === "declined") return l.isDeclined;
     return true;
   });
 
@@ -161,13 +288,22 @@ export default function AuthorityPage() {
             Platform admin — {publicKey?.toBase58().slice(0, 16)}...
           </p>
         </div>
-        <button
-          onClick={fetchAllLands}
-          disabled={loading}
-          className="bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition text-sm disabled:opacity-50"
-        >
-          {loading ? "Refreshing..." : "🔄 Refresh"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={initializePlatform}
+            disabled={loading}
+            className="bg-purple-700 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition text-sm disabled:opacity-50"
+          >
+            {loading ? "Initializing..." : "⚙️ Initialize Platform"}
+          </button>
+          <button
+            onClick={fetchAllLands}
+            disabled={loading}
+            className="bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition text-sm disabled:opacity-50"
+          >
+            {loading ? "Refreshing..." : "🔄 Refresh"}
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -198,7 +334,7 @@ export default function AuthorityPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-4">
-        {(["pending", "verified", "all"] as const).map((tab) => (
+        {(["pending", "verified", "declined", "all"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -212,6 +348,8 @@ export default function AuthorityPage() {
               ? `⏳ Pending (${stats.pendingLands})`
               : tab === "verified"
               ? `✅ Verified (${stats.verifiedLands})`
+              : tab === "declined"
+              ? `❌ Declined (${stats.declinedLands})`
               : `🗺️ All (${stats.totalLands})`}
           </button>
         ))}
@@ -275,6 +413,10 @@ export default function AuthorityPage() {
                       <span className="bg-green-100 text-green-700 px-2 py-1 rounded-full text-xs font-medium">
                         Verified
                       </span>
+                    ) : land.isDeclined ? (
+                      <span className="bg-red-100 text-red-700 px-2 py-1 rounded-full text-xs font-medium">
+                        Declined
+                      </span>
                     ) : (
                       <span className="bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full text-xs font-medium">
                         Pending
@@ -282,14 +424,28 @@ export default function AuthorityPage() {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    {!land.isVerified && (
-                      <button
-                        onClick={() => handleVerify(land)}
-                        disabled={verifying === land.landId}
-                        className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs hover:bg-green-500 transition disabled:opacity-50"
-                      >
-                        {verifying === land.landId ? "Verifying..." : "Verify ✓"}
-                      </button>
+                    {!land.isVerified && !land.isDeclined && (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleVerify(land)}
+                          disabled={verifying === land.landId}
+                          className="bg-green-600 text-white px-3 py-1 rounded-lg text-xs hover:bg-green-500 transition disabled:opacity-50"
+                        >
+                          {verifying === land.landId ? "..." : "Verify ✓"}
+                        </button>
+                        <button
+                          onClick={() => handleDecline(land)}
+                          disabled={verifying === land.landId}
+                          className="bg-red-500 text-white px-3 py-1 rounded-lg text-xs hover:bg-red-400 transition disabled:opacity-50"
+                        >
+                          Decline ✗
+                        </button>
+                      </div>
+                    )}
+                    {land.isDeclined && (
+                      <span className="text-red-500 text-xs font-medium">
+                        Declined
+                      </span>
                     )}
                   </td>
                 </tr>
