@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@google/earthengine": "^1.7.22",
     "@solana/spl-token": "^0.4.14",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.39",
@@ -17,12 +18,19 @@
     "@solana/wallet-adapter-wallets": "^0.19.37",
     "@solana/web3.js": "^1.98.4",
     "@types/leaflet": "^1.9.21",
+    "flask": "^0.2.10",
+    "flask-cors": "^0.0.1",
     "leaflet": "^1.9.4",
     "next": "16.2.1",
+    "numpy": "^0.0.1",
+    "pandas": "^0.0.3",
     "pinata": "^2.5.5",
+    "python": "^0.0.4",
+    "python3": "^0.0.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "react-leaflet": "^5.0.0"
+    "react-leaflet": "^5.0.0",
+    "scikit-learn": "^0.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

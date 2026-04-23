@@ -1,5 +1,5 @@
 {
-  "address": "7qpxvaW7T37SYE3BubL56zgzWRJqf4w575y5ZaHPo36d",
+  "address": "4XgM7JHxi24iXdAs2ykKrWtwZXM9X5rfxKd8dcUZk8Kr",
   "metadata": {
     "name": "solana_contract",
     "version": "0.1.0",
@@ -316,7 +316,15 @@
           "type": "string"
         },
         {
-          "name": "ipfs_cid",
+          "name": "polygon_coordinates",
+          "type": {
+            "vec": {
+              "vec": "f64"
+            }
+          }
+        },
+        {
+          "name": "document_cid",
           "type": "string"
         },
         {
@@ -415,52 +423,72 @@
     {
       "code": 6000,
       "name": "Unauthorized",
-      "msg": "Unauthorized: only platform authority can perform this action"
+      "msg": "Unauthorized"
     },
     {
       "code": 6001,
       "name": "LandIdTooLong",
-      "msg": "Land ID exceeds maximum length of 64 characters"
+      "msg": "Land ID exceeds 64 characters"
     },
     {
       "code": 6002,
       "name": "CidTooLong",
-      "msg": "IPFS CID exceeds maximum length of 128 characters"
+      "msg": "IPFS CID exceeds 128 characters"
     },
     {
       "code": 6003,
       "name": "InvalidArea",
-      "msg": "Area must be greater than 0"
+      "msg": "Area must be > 0"
     },
     {
       "code": 6004,
-      "name": "LandNotVerified",
-      "msg": "Land is not verified yet"
+      "name": "InvalidDensity",
+      "msg": "Density values must be >= 0"
     },
     {
       "code": 6005,
-      "name": "AlreadyVerified",
-      "msg": "Already verified"
+      "name": "LandNotVerified",
+      "msg": "Land is not verified"
     },
     {
       "code": 6006,
-      "name": "TooSoon",
-      "msg": "Minimum 1 year gap required between calculations"
+      "name": "AlreadyVerified",
+      "msg": "Land is already verified"
     },
     {
       "code": 6007,
       "name": "AlreadyDeclined",
-      "msg": "Already declined"
+      "msg": "Land is already declined"
     },
     {
       "code": 6008,
-      "name": "ReasonTooLong",
-      "msg": "Rejection reason exceeds maximum length of 128 characters"
+      "name": "TooSoon",
+      "msg": "Minimum 1-year gap between calculations"
     },
     {
       "code": 6009,
+      "name": "ReasonTooLong",
+      "msg": "Rejection reason exceeds 128 characters"
+    },
+    {
+      "code": 6010,
       "name": "LandDeclined",
-      "msg": "Land registration was declined"
+      "msg": "Land was declined"
+    },
+    {
+      "code": 6011,
+      "name": "InvalidCoordinates",
+      "msg": "Invalid polygon: need ≥3 [lon, lat] pairs"
+    },
+    {
+      "code": 6012,
+      "name": "Overflow",
+      "msg": "Integer overflow"
+    },
+    {
+      "code": 6013,
+      "name": "NoCarbonIncrease",
+      "msg": "No carbon increase detected - credits only allocated for carbon gains"
     }
   ],
   "types": [
@@ -490,11 +518,19 @@
             "type": "f64"
           },
           {
-            "name": "total_density",
+            "name": "total_carbon_density",
             "type": "f64"
           },
           {
-            "name": "carbon_stock",
+            "name": "carbon_stock_tc",
+            "type": "f64"
+          },
+          {
+            "name": "carbon_stock_co2e",
+            "type": "f64"
+          },
+          {
+            "name": "previous_carbon_stock_co2e",
             "type": "f64"
           },
           {
@@ -504,6 +540,14 @@
           {
             "name": "timestamp",
             "type": "i64"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "sequence_index",
+            "type": "u32"
           },
           {
             "name": "bump",
@@ -526,7 +570,15 @@
             "type": "string"
           },
           {
-            "name": "ipfs_cid",
+            "name": "polygon_coordinates",
+            "type": {
+              "vec": {
+                "vec": "f64"
+              }
+            }
+          },
+          {
+            "name": "document_cid",
             "type": "string"
           },
           {
@@ -550,6 +602,18 @@
             "type": "u16"
           },
           {
+            "name": "total_credits_minted",
+            "type": "u64"
+          },
+          {
+            "name": "calculation_count",
+            "type": "u32"
+          },
+          {
+            "name": "last_carbon_stock_co2e",
+            "type": "f64"
+          },
+          {
             "name": "bump",
             "type": "u8"
           }
@@ -571,6 +635,10 @@
           },
           {
             "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "mint_bump",
             "type": "u8"
           }
         ]

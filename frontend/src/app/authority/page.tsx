@@ -11,7 +11,8 @@ interface LandRecord {
   publicKey: string;
   owner: string;
   landId: string;
-  ipfsCid: string;
+  polygonCoordinates: Array<[number, number]>;
+  documentCid: string;
   areaHectares: number;
   isVerified: boolean;
   isDeclined: boolean;
@@ -42,8 +43,62 @@ export default function AuthorityPage() {
   const [verifying, setVerifying] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"pending" | "verified" | "declined" | "all">("pending");
+  const [platformInitialized, setPlatformInitialized] = useState<boolean>(false);
+  const [checkingPlatform, setCheckingPlatform] = useState<boolean>(true);
 
   const isAuthority = publicKey?.toBase58() === AUTHORITY_PUBKEY;
+
+  // Global handler to suppress wallet rejection errors from console
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const error = event.reason;
+      if (!error) return;
+      
+      const errorStr = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''} ${error?.toString() || ''}`.toLowerCase();
+      const isWalletRejection = 
+        error.code === 4001 ||
+        errorStr.includes('user reject') ||
+        errorStr.includes('rejected') ||
+        errorStr.includes('decline') ||
+        errorStr.includes('cancelled') ||
+        errorStr.includes('user denied') ||
+        error.name === 'WalletSignTransactionError';
+      
+      // Prevent wallet rejection errors from showing in console
+      if (isWalletRejection) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+  }, []);
+
+  // Global handler to suppress wallet rejection errors from console
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const error = event.reason;
+      if (!error) return;
+      
+      const errorStr = `${error?.code || ''} ${error?.name || ''} ${error?.message || ''} ${error?.toString() || ''}`.toLowerCase();
+      const isWalletRejection = 
+        error.code === 4001 ||
+        errorStr.includes('user reject') ||
+        errorStr.includes('rejected') ||
+        errorStr.includes('decline') ||
+        errorStr.includes('cancelled') ||
+        errorStr.includes('user denied') ||
+        error.name === 'WalletSignTransactionError';
+      
+      // Prevent wallet rejection errors from showing in console
+      if (isWalletRejection) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+  }, []);
 
   const initializePlatform = async () => {
     if (!program || !publicKey) return;
@@ -72,6 +127,7 @@ export default function AuthorityPage() {
         .rpc();
 
       setStatus(`✅ Platform initialized! Tx: ${tx}`);
+      setPlatformInitialized(true);
       await fetchAllLands();
     } catch (e: any) {
       console.error(e);
@@ -91,7 +147,8 @@ export default function AuthorityPage() {
         publicKey: l.publicKey.toBase58(),
         owner: l.account.owner.toBase58(),
         landId: l.account.landId,
-        ipfsCid: l.account.ipfsCid,
+        polygonCoordinates: l.account.polygonCoordinates,
+        documentCid: l.account.documentCid,
         areaHectares: l.account.areaHectares,
         isVerified: l.account.isVerified,
         isDeclined: l.account.isDeclined,
@@ -172,11 +229,54 @@ export default function AuthorityPage() {
           landRecord: landRecordPda,
           authority: publicKey,
         })
-        .rpc();
+        .rpc()
+        .catch((rpcError: any) => {
+          // Catch and handle RPC errors before they propagate
+          const errorMsg = rpcError?.message || rpcError?.toString() || '';
+          
+          if (errorMsg.includes('already been processed')) {
+            // Transaction was already processed successfully
+            setStatus(`✅ Land ${land.landId} has already been verified on the blockchain. Refreshing...`);
+            fetchAllLands();
+            throw new Error('ALREADY_PROCESSED');
+          }
+          
+          // Re-throw other errors
+          throw rpcError;
+        });
 
       setStatus(`✅ Land ${land.landId} verified! Tx: ${tx}`);
       await fetchAllLands();
     } catch (e: any) {
+      // Handle already processed marker (set in .catch() above)
+      if (e?.message === 'ALREADY_PROCESSED') {
+        setVerifying(null);
+        return;
+      }
+      
+      // Check for "already been processed" error
+      if (e.message?.includes("already been processed") || e.message?.includes("already processed")) {
+        setStatus(`✅ Land ${land.landId} has already been verified on the blockchain. Refreshing...`);
+        await fetchAllLands();
+        return;
+      }
+      
+      // Check for SendTransactionError
+      if (e.name === 'SendTransactionError' || e.constructor?.name === 'SendTransactionError') {
+        try {
+          const logs = e.getLogs?.() || e.logs || [];
+          const logsString = Array.isArray(logs) ? logs.join(' ') : logs?.toString() || '';
+          
+          if (logsString.includes('already been processed')) {
+            setStatus(`✅ Land ${land.landId} has already been verified on the blockchain. Refreshing...`);
+            await fetchAllLands();
+            return;
+          }
+        } catch (logError) {
+          // Continue to next error handler
+        }
+      }
+
       console.error(e);
       setStatus(`❌ Error: ${e.message}`);
     } finally {
@@ -221,11 +321,54 @@ export default function AuthorityPage() {
           landRecord: landRecordPda,
           authority: publicKey,
         })
-        .rpc();
+        .rpc()
+        .catch((rpcError: any) => {
+          // Catch and handle RPC errors before they propagate
+          const errorMsg = rpcError?.message || rpcError?.toString() || '';
+          
+          if (errorMsg.includes('already been processed')) {
+            // Transaction was already processed successfully
+            setStatus(`✅ Land ${land.landId} has already been declined on the blockchain. Refreshing...`);
+            fetchAllLands();
+            throw new Error('ALREADY_PROCESSED');
+          }
+          
+          // Re-throw other errors
+          throw rpcError;
+        });
 
       setStatus(`❌ Land ${land.landId} declined. Tx: ${tx}`);
       await fetchAllLands();
     } catch (e: any) {
+      // Handle already processed marker (set in .catch() above)
+      if (e?.message === 'ALREADY_PROCESSED') {
+        setVerifying(null);
+        return;
+      }
+      
+      // Check for "already been processed" error
+      if (e.message?.includes("already been processed") || e.message?.includes("already processed")) {
+        setStatus(`✅ Land ${land.landId} has already been declined on the blockchain. Refreshing...`);
+        await fetchAllLands();
+        return;
+      }
+      
+      // Check for SendTransactionError
+      if (e.name === 'SendTransactionError' || e.constructor?.name === 'SendTransactionError') {
+        try {
+          const logs = e.getLogs?.() || e.logs || [];
+          const logsString = Array.isArray(logs) ? logs.join(' ') : logs?.toString() || '';
+          
+          if (logsString.includes('already been processed')) {
+            setStatus(`✅ Land ${land.landId} has already been declined on the blockchain. Refreshing...`);
+            await fetchAllLands();
+            return;
+          }
+        } catch (logError) {
+          // Continue to next error handler
+        }
+      }
+
       console.error(e);
       setStatus(`❌ Error: ${e.message}`);
     } finally {
@@ -236,6 +379,41 @@ export default function AuthorityPage() {
   useEffect(() => {
     if (program && isAuthority) {
       fetchAllLands();
+    }
+  }, [program, isAuthority]);
+
+  useEffect(() => {
+    const checkPlatformStatus = async () => {
+      if (!program) {
+        setCheckingPlatform(false);
+        return;
+      }
+
+      try {
+        const [platformStatePda] = PublicKey.findProgramAddressSync(
+          [Buffer.from("platform")],
+          program.programId
+        );
+
+        // Try to fetch the platform state account
+        try {
+          // @ts-ignore
+          await program.account.platformState.fetch(platformStatePda);
+          setPlatformInitialized(true);
+        } catch {
+          // Platform not initialized
+          setPlatformInitialized(false);
+        }
+      } catch (e: any) {
+        console.error("Error checking platform status:", e);
+        setPlatformInitialized(false);
+      } finally {
+        setCheckingPlatform(false);
+      }
+    };
+
+    if (program && isAuthority) {
+      checkPlatformStatus();
     }
   }, [program, isAuthority]);
 
@@ -289,13 +467,20 @@ export default function AuthorityPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={initializePlatform}
-            disabled={loading}
-            className="bg-purple-700 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition text-sm disabled:opacity-50"
-          >
-            {loading ? "Initializing..." : "⚙️ Initialize Platform"}
-          </button>
+          {!platformInitialized && (
+            <button
+              onClick={initializePlatform}
+              disabled={loading}
+              className="bg-purple-700 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition text-sm disabled:opacity-50"
+            >
+              {loading ? "Initializing..." : "⚙️ Initialize Platform"}
+            </button>
+          )}
+          {platformInitialized && (
+            <span className="bg-green-100 text-green-800 px-4 py-2 rounded-lg text-sm font-medium">
+              ✅ Platform Initialized
+            </span>
+          )}
           <button
             onClick={fetchAllLands}
             disabled={loading}
@@ -400,7 +585,7 @@ export default function AuthorityPage() {
                   </td>
                   <td className="px-4 py-3">
                     <a
-                      href={`https://ipfs.io/ipfs/${land.ipfsCid}`}
+                      href={`https://ipfs.io/ipfs/${land.documentCid}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-blue-600 underline text-xs"

@@ -6,7 +6,7 @@ import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import idl from "@/idl/solana_contract.json";
 
-const PROGRAM_ID = new PublicKey("7qpxvaW7T37SYE3BubL56zgzWRJqf4w575y5ZaHPo36d");
+const PROGRAM_ID = new PublicKey("4XgM7JHxi24iXdAs2ykKrWtwZXM9X5rfxKd8dcUZk8Kr");
 
 interface AnchorContextType {
   program: Program | null;
@@ -33,6 +33,7 @@ export const AnchorContextProvider: FC<{ children: ReactNode }> = ({
       skipPreflight: false,
     });
 
+    // Program ID is extracted from IDL's address field
     const program = new Program(idl as Idl, provider);
 
     return { program, provider };

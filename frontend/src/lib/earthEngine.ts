@@ -1,6 +1,7 @@
 import ee from '@google/earthengine';
 
 let isInitialized = false;
+let initializationPromise: Promise<void> | null = null;
 
 /**
  * Initialize Google Earth Engine with service account credentials
@@ -10,44 +11,104 @@ export async function initializeEarthEngine(): Promise<void> {
     return;
   }
 
-  return new Promise((resolve, reject) => {
+  // If initialization is already in progress, wait for it
+  if (initializationPromise) {
+    return initializationPromise;
+  }
+
+  initializationPromise = new Promise((resolve, reject) => {
     const privateKey = process.env.GEE_PRIVATE_KEY?.replace(/\\n/g, '\n');
     const serviceAccount = process.env.GEE_SERVICE_ACCOUNT_EMAIL;
     const projectId = process.env.GEE_PROJECT_ID;
 
     if (!privateKey || !serviceAccount || !projectId) {
-      reject(new Error('GEE credentials not configured. Please set environment variables.'));
+      const missingVars = [];
+      if (!privateKey) missingVars.push('GEE_PRIVATE_KEY');
+      if (!serviceAccount) missingVars.push('GEE_SERVICE_ACCOUNT_EMAIL');
+      if (!projectId) missingVars.push('GEE_PROJECT_ID');
+      const error = new Error(`GEE credentials not configured. Missing environment variables: ${missingVars.join(', ')}`);
+      console.error('❌', error.message);
+      initializationPromise = null;
+      reject(error);
       return;
     }
 
-    ee.data.authenticateViaPrivateKey(
-      {
-        client_email: serviceAccount,
-        private_key: privateKey,
-      },
-      () => {
-        // Initialize with cloud project - use the newer API format
-        const baseUrl = 'https://earthengine.googleapis.com/api';
-        ee.initialize(
-          baseUrl,
-          null,
-          () => {
-            isInitialized = true;
-            console.log('Google Earth Engine initialized successfully');
-            resolve();
-          },
-          (error: Error) => {
-            console.error('Failed to initialize Earth Engine:', error);
-            reject(error);
+    console.log('🔄 Authenticating with Google Earth Engine...');
+    console.log(`   Service Account: ${serviceAccount}`);
+    console.log(`   Project ID: ${projectId}`);
+
+    let initTimeout: NodeJS.Timeout | null = null;
+
+    try {
+      ee.data.authenticateViaPrivateKey(
+        {
+          client_email: serviceAccount,
+          private_key: privateKey,
+        },
+        () => {
+          console.log('✅ Authentication successful, initializing Earth Engine API...');
+          // Initialize with cloud project - use the newer API format
+          const baseUrl = 'https://earthengine.googleapis.com/api';
+          ee.initialize(
+            baseUrl,
+            null,
+            () => {
+              isInitialized = true;
+              if (initTimeout) clearTimeout(initTimeout);
+              console.log('✅ Google Earth Engine initialized successfully');
+              initializationPromise = null;
+              resolve();
+            },
+            (error: Error) => {
+              if (initTimeout) clearTimeout(initTimeout);
+              console.error('❌ Failed to initialize Earth Engine API:', error);
+              const errorMsg = error?.message || String(error) || 'Unknown initialization error';
+              initializationPromise = null;
+              // Provide better error context
+              if (errorMsg.includes('ECONNREFUSED') || errorMsg.includes('connect')) {
+                reject(new Error(`Cannot connect to Earth Engine API. Check network connectivity to earthengine.googleapis.com: ${errorMsg}`));
+              } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
+                reject(new Error(`Earth Engine authentication failed. Invalid credentials: ${errorMsg}`));
+              } else {
+                reject(new Error(`Earth Engine initialization failed: ${errorMsg}`));
+              }
+            }
+          );
+        },
+        (error: Error) => {
+          if (initTimeout) clearTimeout(initTimeout);
+          console.error('❌ Failed to authenticate with Earth Engine:', error);
+          const errorMsg = error?.message || String(error) || 'Unknown authentication error';
+          initializationPromise = null;
+          if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
+            reject(new Error(`Invalid service account credentials: ${errorMsg}`));
+          } else if (errorMsg.includes('private key')) {
+            reject(new Error(`Invalid private key format: ${errorMsg}`));
+          } else {
+            reject(new Error(`Earth Engine authentication failed: ${errorMsg}`));
           }
-        );
-      },
-      (error: Error) => {
-        console.error('Failed to authenticate with Earth Engine:', error);
-        reject(error);
+        }
+      );
+    } catch (error: any) {
+      if (initTimeout) clearTimeout(initTimeout);
+      const errorMsg = error?.message || String(error) || 'Unknown error';
+      console.error('❌ Error during Earth Engine initialization:', errorMsg);
+      initializationPromise = null;
+      reject(new Error(`Error initializing Earth Engine: ${errorMsg}`));
+      return;
+    }
+
+    // Add a timeout for initialization
+    initTimeout = setTimeout(() => {
+      if (!isInitialized && initializationPromise) {
+        console.error('❌ Earth Engine initialization timed out after 30 seconds');
+        initializationPromise = null;
+        reject(new Error('Earth Engine initialization timed out after 30 seconds. Check network connectivity.'));
       }
-    );
+    }, 30000);
   });
+
+  return initializationPromise;
 }
 
 /**

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo, memo } from "react";
 import {
     MapContainer,
     TileLayer,
@@ -45,9 +45,11 @@ interface ClickHandlerProps {
 }
 
 function ClickHandler({ onClick, onDoubleClick }: ClickHandlerProps) {
-    useMapEvents({
+    const map = useMapEvents({
         click(e) {
-            onClick([e.latlng.lat, e.latlng.lng]);
+            if (map) {
+                onClick([e.latlng.lat, e.latlng.lng]);
+            }
         },
         dblclick() {
             onDoubleClick();
@@ -60,12 +62,13 @@ interface LandMapProps {
     onPolygonChange: (coords: [number, number][], area: number) => void;
 }
 
-export default function LandMap({ onPolygonChange }: LandMapProps) {
+function LandMapInner({ onPolygonChange }: LandMapProps) {
     const [points, setPoints] = useState<[number, number][]>([]);
     const [finished, setFinished] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [undoStack, setUndoStack] = useState<[number, number][][]>([]);
     const [redoStack, setRedoStack] = useState<[number, number][][]>([]);
+    const [mapKey, setMapKey] = useState(0);
     const mapRef = useRef<any>(null);
 
     const handleClick = (latlng: [number, number]) => {
@@ -179,22 +182,21 @@ export default function LandMap({ onPolygonChange }: LandMapProps) {
 
             {/* Map */}
             <MapContainer
+                key={mapKey}
                 ref={mapRef}
                 center={[26.5, 90.5]}
                 zoom={10}
                 style={{ height: "500px", width: "100%", zIndex: 0 }}
             >
                 {/* Hybrid View: Satellite + Labels */}
-                <>
-                    <TileLayer
-                        attribution='&copy; Esri, DigitalGlobe, GeoEye, Earthstar Geographics'
-                        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                    />
-                    <TileLayer
-                        attribution='&copy; Esri'
-                        url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
-                    />
-                </>
+                <TileLayer
+                    attribution='&copy; Esri, DigitalGlobe, GeoEye, Earthstar Geographics'
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                />
+                <TileLayer
+                    attribution='&copy; Esri'
+                    url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+                />
                 
                 <ClickHandler
                     onClick={handleClick}
@@ -293,3 +295,6 @@ export default function LandMap({ onPolygonChange }: LandMapProps) {
         </div>
     );
 }
+
+// Export memoized component to prevent unnecessary re-renders from parent
+export default memo(LandMapInner);
