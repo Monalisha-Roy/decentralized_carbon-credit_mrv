@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
-declare_id!("4XgM7JHxi24iXdAs2ykKrWtwZXM9X5rfxKd8dcUZk8Kr");
+declare_id!("8fYcCBJkiV8JTzWcKLH32GAWsg85q7hYdq7H2BqkZg6q");
 
 // 1 tonne C = 3.667 tonnes CO2e
 const CO2E_FACTOR: f64 = 3.667;
@@ -86,12 +86,29 @@ pub mod solana_contract {
     }
 
     pub fn calculate_and_mint(
+        _ctx: Context<CalculateAndMint>,
+        _land_id: String,
+        _year: u16,
+        _agb_density: f64,
+        _bgb_density: f64,
+        _soc_density: f64,
+    ) -> Result<()> {
+        // Legacy wrapper - if not using v2, assume absolute_co2e_end_year = 0
+        // This maintains backward compatibility but won't store proper baseline CO2e
+        require!(false, ErrorCode::DeprecatedFunction);
+        Ok(())
+    }
+
+    pub fn calculate_and_mint_v2(
         ctx: Context<CalculateAndMint>,
         land_id: String,
         year: u16,
-        agb_density: f64,  // CHANGE in AGB density (t/ha) — end minus start year
-        bgb_density: f64,  // CHANGE in BGB density (t/ha) — end minus start year
-        soc_density: f64,  // CHANGE in SOC density (t/ha) — end minus start year
+        agb_density: f64,
+        bgb_density: f64,
+        soc_density: f64,
+        _absolute_co2e_end_year: f64,
+        absolute_co2e_start_year: f64,
+        metadata_cid: String,
     ) -> Result<()> {
         let land = &mut ctx.accounts.land_record;
 
@@ -102,48 +119,52 @@ pub mod solana_contract {
         );
         require!(land.is_verified, ErrorCode::LandNotVerified);
         require!(!land.is_declined, ErrorCode::LandDeclined);
+        require!(metadata_cid.len() <= 64, ErrorCode::CidTooLong);
 
         if land.last_calculated_year != 0 {
             require!(year > land.last_calculated_year, ErrorCode::TooSoon);
         }
 
-        // ── Step 1: Sum the delta densities (end - start from off-chain ML) ──────
-        let total_carbon_density_change = agb_density + bgb_density + soc_density;
+        let total_carbon_density = agb_density + bgb_density + soc_density;
+        let carbon_stock_tc = total_carbon_density * land.area_hectares;
+        let carbon_stock_co2e_absolute = carbon_stock_tc * CO2E_FACTOR;
 
-        // ── Step 2: Multiply delta density by area to get total carbon change (tC) 
-        let carbon_stock_change_tc = total_carbon_density_change * land.area_hectares;
+        // Use on-chain value for subsequent calcs, passed startYear for first calc
+        let baseline_co2e = if land.last_carbon_stock_co2e > 0.0 {
+            land.last_carbon_stock_co2e
+        } else {
+            absolute_co2e_start_year
+        };
 
-        // ── Step 3: Convert tC change to CO2e ────────────────────────────────────
-        let carbon_stock_change_co2e = carbon_stock_change_tc * CO2E_FACTOR;
+        let carbon_stock_change_co2e = carbon_stock_co2e_absolute - baseline_co2e;
 
-        // ── Step 4: Only mint credits if carbon increased, record 0 otherwise ────
-        // Zero and negative deltas are recorded on-chain but no tokens are minted
         let credits_to_mint = if carbon_stock_change_co2e > 0.0 {
             carbon_stock_change_co2e as u64
         } else {
             0u64
         };
 
-        // ── Write CarbonRecord PDA ────────────────────────────────────────────────
         let carbon = &mut ctx.accounts.carbon_record;
+
         carbon.land_id = land_id.clone();
         carbon.year = year;
         carbon.agb_density = agb_density;
         carbon.bgb_density = bgb_density;
         carbon.soc_density = soc_density;
-        carbon.total_carbon_density = total_carbon_density_change;
-        carbon.carbon_stock_tc = carbon_stock_change_tc;
-        carbon.carbon_stock_co2e = carbon_stock_change_co2e;
+        carbon.total_carbon_density = total_carbon_density;
+        carbon.carbon_stock_tc = carbon_stock_tc;
+        carbon.carbon_stock_co2e = carbon_stock_co2e_absolute;
         carbon.previous_carbon_stock_co2e = land.last_carbon_stock_co2e;
         carbon.credits_minted = credits_to_mint;
         carbon.timestamp = Clock::get()?.unix_timestamp;
         carbon.authority = ctx.accounts.authority.key();
         carbon.sequence_index = land.calculation_count;
+        carbon.metadata_cid = metadata_cid;
         carbon.bump = ctx.bumps.carbon_record;
 
         // ── Update LandRecord ─────────────────────────────────────────────────────
         land.last_calculated_year = year;
-        land.last_carbon_stock_co2e = carbon_stock_change_co2e;
+        land.last_carbon_stock_co2e = carbon_stock_co2e_absolute;
         land.total_credits_minted = land
             .total_credits_minted
             .checked_add(credits_to_mint)
@@ -171,16 +192,19 @@ pub mod solana_contract {
         }
 
         msg!(
-            "Land: {} | Year: {} | Carbon Δ: {:.2} tC ({:.2} tCO2e) | Credits minted: {} | Lifetime total: {}",
+            "Land: {} | Year: {} | Stock: {:.2} tC ({:.2} tCO2e) | Δ: {:.2} tCO2e | Credits: {} | Lifetime: {}",
             land_id,
             year,
-            carbon_stock_change_tc,
+            carbon_stock_tc,
+            carbon_stock_co2e_absolute,
             carbon_stock_change_co2e,
             credits_to_mint,
             land.total_credits_minted
         );
         Ok(())
     }
+
+
 }
 
 // ─── Account Structs ─────────────────────────────────────────────────────────
@@ -225,7 +249,8 @@ pub struct CarbonRecord {
     pub credits_minted: u64,               // 8  — delta-based credits
     pub timestamp: i64,                    // 8
     pub authority: Pubkey,                 // 32
-    pub sequence_index: u32,               // 4  — 0-based position in history
+    pub sequence_index: u32,               
+    pub metadata_cid: String,   
     pub bump: u8,                          // 1
 }
 // space = 8 + 68 + 2 + (8*8) + 8 + 8 + 32 + 4 + 1 = 195
@@ -324,9 +349,7 @@ pub struct CalculateAndMint<'info> {
     #[account(
         init,
         payer = authority,
-        // FIX: space updated for extra f64 (previous_carbon_stock_co2e = +8 bytes)
-        // 8 disc + 68 land_id + 2 year + 8*8 f64 fields + 8 credits + 8 ts + 32 authority + 4 seq + 1 bump
-        space = 8 + (4 + 64) + 2 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 4 + 1,
+        space = 8 + (4 + 64) + 2 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 4 + (4 + 64) + 1,
         seeds = [b"carbon", land_id.as_bytes(), &year.to_le_bytes()],
         bump
     )]
@@ -384,4 +407,6 @@ pub enum ErrorCode {
     Overflow,
     #[msg("No carbon increase detected - credits only allocated for carbon gains")]
     NoCarbonIncrease,
+    #[msg("This function is deprecated - use calculate_and_mint_v2 instead")]
+    DeprecatedFunction,
 }

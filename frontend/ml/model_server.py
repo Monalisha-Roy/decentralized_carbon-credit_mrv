@@ -4,13 +4,16 @@ Provides ML model predictions for AGB (Above Ground Biomass) and SOC (Soil Organ
 using satellite and terrain data from Google Earth Engine.
 
 Models:
-- AGB: Random Forest model with uncertainty estimation (agb_satellite_rf_uncertainty.pkl)
-- SOC: Soil Organic Carbon model (SOC_model.pkl)
+- AGB Satellite: Random Forest model with uncertainty estimation (agb_satellite_rf_uncertainty.pkl)
+- SOC:           Soil Organic Carbon model (SOC_model.pkl)
+- Crown Detector: Detectron2 instance segmentation (crown_detector_model.pkl + model_final.pth)
+- AGB Drone:     Random Forest regressor (agb_drone_regressor_model.pkl)
 """
 
 import os
 import sys
 import json
+import math
 import pickle
 import logging
 import numpy as np
@@ -20,223 +23,157 @@ from typing import Dict, Any, Tuple
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Configure logging
+import drone_pipeline  
+from agb_fusion import AGBEstimate, fuse_agb
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
+# ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
 
-# Get the directory where this script is located
+# ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).parent.absolute()
 MODELS_DIR = SCRIPT_DIR / "models"
 
-# Global variables for models
-agb_model = None
-soc_model = None
+# ── Satellite model globals ───────────────────────────────────────────────────
+agb_model    = None
+soc_model    = None
 models_loaded = False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MODEL LOADING
+# ─────────────────────────────────────────────────────────────────────────────
+
 def load_models() -> Tuple[bool, str]:
     """
-    Load ML models from pickle files.
-    
+    Load all ML models from pickle files.
+    Satellite models are loaded here; drone models are delegated to drone_pipeline.
+
     Returns:
         Tuple[bool, str]: (success, message)
     """
     global agb_model, soc_model, models_loaded
-    
+
     try:
+        # ── Satellite AGB model ───────────────────────────────────────────────
         agb_path = MODELS_DIR / "agb_satellite_rf_uncertainty.pkl"
-        soc_path = MODELS_DIR / "SOC_model.pkl"
-        
-        # Check if model files exist
         if not agb_path.exists():
             raise FileNotFoundError(f"AGB model not found at {agb_path}")
-        if not soc_path.exists():
-            raise FileNotFoundError(f"SOC model not found at {soc_path}")
-        
-        logger.info(f"Loading AGB model from {agb_path}")
+
+        logger.info(f"Loading AGB satellite model from {agb_path}")
         with open(agb_path, 'rb') as f:
             agb_model = pickle.load(f)
-        logger.info("✅ AGB model loaded successfully")
-        
+        logger.info("✅ AGB satellite model loaded successfully")
+
+        # ── SOC model ─────────────────────────────────────────────────────────
+        soc_path = MODELS_DIR / "SOC_model.pkl"
+        if not soc_path.exists():
+            raise FileNotFoundError(f"SOC model not found at {soc_path}")
+
         logger.info(f"Loading SOC model from {soc_path}")
         with open(soc_path, 'rb') as f:
             soc_model = pickle.load(f)
         logger.info("✅ SOC model loaded successfully")
-        
+
+        # ── Drone models (crown detector + drone RF) ──────────────────────────
+        logger.info("Loading drone models...")
+        success, message = drone_pipeline.load_drone_models(MODELS_DIR)
+        if not success:
+            raise RuntimeError(f"Drone model loading failed: {message}")
+
         models_loaded = True
-        return True, "Models loaded successfully"
-        
+        return True, "All models loaded successfully"
+
     except Exception as e:
         error_msg = f"Failed to load models: {str(e)}"
         logger.error(error_msg)
         return False, error_msg
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SATELLITE FEATURE VALIDATION & PREPARATION  (unchanged from original)
+# ─────────────────────────────────────────────────────────────────────────────
+
 def validate_agb_features(features: Dict[str, float]) -> Tuple[bool, str]:
-    """
-    Validate AGB model input features.
-    
-    Expected features:
-    - Optical bands: B2, B3, B4, B5, B6, B7, B8, B11, B12
-    - Vegetation indices: NDVI
-    - SAR bands: VV, VH
-    - Terrain: elevation, slope
-    - Location: latitude, longitude
-    
-    Total: 19 features
-    """
     required_features = [
         'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B11', 'B12',
         'NDVI', 'VV', 'VH', 'elevation', 'slope'
     ]
-    
     missing = [f for f in required_features if f not in features]
     if missing:
         return False, f"Missing features: {', '.join(missing)}"
-    
     return True, "Valid features"
 
 
 def validate_soc_features(features: Dict[str, float]) -> Tuple[bool, str]:
-    """
-    Validate SOC model input features.
-    
-    Expected features (16 features):
-    - Optical bands: B2, B3, B4, B8, B11
-    - Vegetation indices: NDVI
-    - SAR bands: VV, VH
-    - Terrain: elevation, slope, aspect
-    - Climate: precip_annual, temp_mean
-    - Soil: soil_texture, bulk_density
-    - Location: latitude, longitude
-    """
     required_features = [
         'B2', 'B3', 'B4', 'B8', 'B11', 'NDVI', 'VV', 'VH',
         'elevation', 'slope', 'aspect', 'precip_annual', 'temp_mean',
         'soil_texture', 'latitude', 'longitude'
     ]
-    
     missing = [f for f in required_features if f not in features]
     if missing:
         return False, f"Missing features: {', '.join(missing)}"
-    
     return True, "Valid features"
 
 
 def prepare_agb_features(features: Dict[str, float]) -> np.ndarray:
-    """
-    Prepare and order features for AGB model prediction.
-    
-    Args:
-        features: Dictionary with feature names and values
-        
-    Returns:
-        np.ndarray: Ordered feature array for model
-    """
-    # Expected feature order for AGB model (19 features)
     feature_order = [
         'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B11', 'B12',
-        'NDVI', 'VV', 'VH', 'elevation', 'slope',
-        'latitude', 'longitude'  # Add location features if available
+        'NDVI', 'VV', 'VH', 'elevation', 'slope'
     ]
-    
-    # Extract features in order, use 0 as default for missing values
-    feature_array = []
-    for feat in feature_order[:14]:  # Use only the main 14 features
-        feature_array.append(features.get(feat, 0.0))
-    
+    feature_array = [features.get(feat, 0.0) for feat in feature_order]
     return np.array(feature_array, dtype=np.float32).reshape(1, -1)
 
 
 def prepare_soc_features(features: Dict[str, float]) -> np.ndarray:
-    """
-    Prepare and order features for SOC model prediction.
-    
-    Args:
-        features: Dictionary with feature names and values
-        
-    Returns:
-        np.ndarray: Ordered feature array for model
-    """
-    # Expected feature order for SOC model (16 features)
     feature_order = [
         'B2', 'B3', 'B4', 'B8', 'B11', 'NDVI', 'VV', 'VH',
         'elevation', 'slope', 'aspect', 'precip_annual', 'temp_mean',
         'soil_texture', 'latitude', 'longitude'
     ]
-    
-    # Extract features in order, use 0 as default for missing values
     feature_array = [features.get(feat, 0.0) for feat in feature_order]
-    
     return np.array(feature_array, dtype=np.float32).reshape(1, -1)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SATELLITE PREDICTION HELPERS  (unchanged from original)
+# ─────────────────────────────────────────────────────────────────────────────
+
 def predict_agb(features: np.ndarray) -> Tuple[float, float]:
-    """
-    Predict AGB and uncertainty using the trained Random Forest model.
-    
-    Args:
-        features: np.ndarray of shape (1, n_features)
-        
-    Returns:
-        Tuple[agb, uncertainty]: Predicted AGB and its uncertainty
-    """
     if not models_loaded or agb_model is None:
         raise RuntimeError("AGB model not loaded")
-    
-    # Get prediction from the ensemble
-    # The model should support predict and predict_uncertainty methods
-    try:
-        # Try to get predictions from all trees in the ensemble
-        if hasattr(agb_model, 'estimators_'):
-            # RandomForest has estimators_
-            predictions = np.array([tree.predict(features)[0] for tree in agb_model.estimators_])
-            agb = np.mean(predictions)
-            uncertainty = np.std(predictions)
-        else:
-            # Fallback to single prediction
-            agb = agb_model.predict(features)[0]
-            # Calculate uncertainty as a percentage (10% default for RF models)
-            uncertainty = agb * 0.1
-        
-        return float(agb), float(uncertainty)
-        
-    except Exception as e:
-        logger.error(f"Error in AGB prediction: {str(e)}")
-        raise
+
+    if hasattr(agb_model, 'estimators_'):
+        predictions = np.array([tree.predict(features)[0] for tree in agb_model.estimators_])
+        agb         = np.mean(predictions)
+        uncertainty = np.std(predictions)
+    else:
+        agb         = agb_model.predict(features)[0]
+        uncertainty = agb * 0.1
+
+    return float(agb), float(uncertainty)
 
 
 def predict_soc(features: np.ndarray) -> float:
-    """
-    Predict SOC using the trained model.
-    
-    Args:
-        features: np.ndarray of shape (1, n_features)
-        
-    Returns:
-        float: Predicted SOC value (t/ha)
-    """
     if not models_loaded or soc_model is None:
         raise RuntimeError("SOC model not loaded")
-    
-    try:
-        soc = soc_model.predict(features)[0]
-        return float(soc)
-    except Exception as e:
-        logger.error(f"Error in SOC prediction: {str(e)}")
-        raise
+    return float(soc_model.predict(features)[0])
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTES — SATELLITE  (unchanged from original)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint."""
     return jsonify({
         'status': 'ok',
         'models_loaded': models_loaded,
@@ -247,298 +184,300 @@ def health():
 @app.route('/predict/agb', methods=['POST'])
 def predict_agb_endpoint():
     """
-    API endpoint for AGB prediction.
-    
-    Expected JSON body:
-    {
-        "features": {
-            "B2": value, "B3": value, ..., "slope": value
-        }
-    }
-    
-    Returns:
-    {
-        "success": true/false,
-        "agb": float (tonnes per hectare),
-        "agb_uncertainty": float (standard deviation),
-        "bgb": float (Below Ground Biomass, calculated as AGB * 0.2)
-    }
+    Satellite AGB prediction.
+
+    Body:  { "features": { "B2": ..., "slope": ... } }
+    Returns: { "success": true, "agb": float, "agb_uncertainty": float, "bgb": float }
     """
     try:
         if not models_loaded:
-            return jsonify({
-                'success': False,
-                'error': 'Models not loaded'
-            }), 500
-        
+            return jsonify({'success': False, 'error': 'Models not loaded'}), 500
+
         data = request.get_json()
-        
         if not data or 'features' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing "features" in request body'
-            }), 400
-        
+            return jsonify({'success': False, 'error': 'Missing "features" in request body'}), 400
+
         features = data['features']
-        
-        # Validate features
         valid, message = validate_agb_features(features)
         if not valid:
-            return jsonify({
-                'success': False,
-                'error': message
-            }), 400
-        
-        # Prepare features
-        feature_array = prepare_agb_features(features)
-        
-        # Make prediction
+            return jsonify({'success': False, 'error': message}), 400
+
+        feature_array   = prepare_agb_features(features)
         agb, uncertainty = predict_agb(feature_array)
-        
-        # Calculate BGB (Below Ground Biomass) as 20% of AGB
-        bgb = agb * 0.2
-        
-        logger.info(f"AGB Prediction: {agb:.2f} t/ha ± {uncertainty:.2f}, BGB: {bgb:.2f} t/ha")
-        
+        bgb              = agb * 0.2
+
+        logger.info(f"Satellite AGB: {agb:.2f} t/ha ± {uncertainty:.2f}")
         return jsonify({
             'success': True,
-            'agb': round(agb, 2),
+            'agb':             round(agb, 2),
             'agb_uncertainty': round(uncertainty, 2),
-            'bgb': round(bgb, 2)
+            'bgb':             round(bgb, 2)
         }), 200
-        
+
     except Exception as e:
-        logger.error(f"Error in AGB prediction endpoint: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        logger.error(f"Error in AGB endpoint: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/predict/soc', methods=['POST'])
 def predict_soc_endpoint():
     """
-    API endpoint for SOC prediction.
-    
-    Expected JSON body:
-    {
-        "features": {
-            "B2": value, "B3": value, ..., "longitude": value
-        }
-    }
-    
-    Returns:
-    {
-        "success": true/false,
-        "soc": float (tonnes per hectare)
-    }
+    SOC prediction.
+
+    Body:  { "features": { "B2": ..., "longitude": ... } }
+    Returns: { "success": true, "soc": float }
     """
     try:
         if not models_loaded:
-            return jsonify({
-                'success': False,
-                'error': 'Models not loaded'
-            }), 500
-        
+            return jsonify({'success': False, 'error': 'Models not loaded'}), 500
+
         data = request.get_json()
-        
         if not data or 'features' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing "features" in request body'
-            }), 400
-        
+            return jsonify({'success': False, 'error': 'Missing "features" in request body'}), 400
+
         features = data['features']
-        
-        # Validate features
         valid, message = validate_soc_features(features)
         if not valid:
-            return jsonify({
-                'success': False,
-                'error': message
-            }), 400
-        
-        # Prepare features
+            return jsonify({'success': False, 'error': message}), 400
+
         feature_array = prepare_soc_features(features)
-        
-        # Make prediction
-        soc = predict_soc(feature_array)
-        
-        logger.info(f"SOC Prediction: {soc:.2f} t/ha")
-        
-        return jsonify({
-            'success': True,
-            'soc': round(soc, 2)
-        }), 200
-        
+        soc           = predict_soc(feature_array)
+
+        logger.info(f"SOC: {soc:.2f} t/ha")
+        return jsonify({'success': True, 'soc': round(soc, 2)}), 200
+
     except Exception as e:
-        logger.error(f"Error in SOC prediction endpoint: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        logger.error(f"Error in SOC endpoint: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/predict/carbon', methods=['POST'])
-def predict_carbon_endpoint():
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTE — DRONE AGB  (replaces old hardcoded allometric endpoint)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/predict/drone_agb', methods=['POST'])
+def predict_drone_agb_endpoint():
     """
-    Combined endpoint for full carbon stock prediction.
-    
+    Drone-based AGB prediction using Detectron2 crown detection + RF regressor.
+
+    Fetches orthomosaic and CHM from Pinata IPFS, runs the full drone pipeline,
+    and returns per-hectare biomass estimates.
+
     Expected JSON body:
     {
-        "agb_features": {...},
-        "soc_features": {...}
+        "orthomosaic_cid": "QmXxx...",   // Pinata CID of orthomosaic GeoTIFF
+        "chm_cid":         "QmYyy..."    // Pinata CID of CHM GeoTIFF
     }
-    
-    Returns all carbon components in one response.
+
+    Returns:
+    {
+        "success":         true,
+        "agb":             45.23,        // t/ha  (Above Ground Biomass)
+        "bgb":             9.05,         // t/ha  (Below Ground Biomass = AGB * 0.2)
+        "agb_uncertainty": 6.78,         // t/ha  (combined RF ensemble SD)
+        "tree_count":      312,
+        "mean_crown_ft":   4.8,
+        "mean_height_m":   12.3,
+        "per_tree":        [ { "id": 0, "crown_ft": 4.2, "height_m": 11.5, "agb_kg": 98.3 }, ... ]
+    }
     """
     try:
         if not models_loaded:
-            return jsonify({
-                'success': False,
-                'error': 'Models not loaded'
-            }), 500
-        
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'Empty request body'
-            }), 400
-        
-        results = {}
-        
-        # Predict AGB if features provided
-        if 'agb_features' in data:
-            agb_features = data['agb_features']
-            valid, message = validate_agb_features(agb_features)
-            if valid:
-                feature_array = prepare_agb_features(agb_features)
-                agb, uncertainty = predict_agb(feature_array)
-                bgb = agb * 0.2
-                results['agb'] = round(agb, 2)
-                results['agb_uncertainty'] = round(uncertainty, 2)
-                results['bgb'] = round(bgb, 2)
-            else:
-                return jsonify({'success': False, 'error': f"AGB validation failed: {message}"}), 400
-        
-        # Predict SOC if features provided
-        if 'soc_features' in data:
-            soc_features = data['soc_features']
-            valid, message = validate_soc_features(soc_features)
-            if valid:
-                feature_array = prepare_soc_features(soc_features)
-                soc = predict_soc(feature_array)
-                results['soc'] = round(soc, 2)
-            else:
-                return jsonify({'success': False, 'error': f"SOC validation failed: {message}"}), 400
-        
-        if not results:
-            return jsonify({
-                'success': False,
-                'error': 'No valid features provided'
-            }), 400
-        
-        # Calculate total carbon
-        total_carbon = results.get('agb', 0) + results.get('bgb', 0) + results.get('soc', 0)
-        results['total_carbon'] = round(total_carbon, 2)
-        results['co2_equivalent'] = round(total_carbon * 3.67, 2)
-        
-        logger.info(f"Carbon Prediction: AGB={results.get('agb')} "
-                   f"BGB={results.get('bgb')} "
-                   f"SOC={results.get('soc')} "
-                   f"Total={total_carbon:.2f} t/ha")
-        
-        return jsonify({
-            'success': True,
-            **results
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error in carbon prediction endpoint: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+            return jsonify({'success': False, 'error': 'Models not loaded'}), 500
 
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'Empty request body'}), 400
+
+        orthomosaic_cid = data.get('orthomosaic_cid', '').strip()
+        chm_cid         = data.get('chm_cid', '').strip()
+
+        if not orthomosaic_cid:
+            return jsonify({'success': False, 'error': 'Missing orthomosaic_cid'}), 400
+        if not chm_cid:
+            return jsonify({'success': False, 'error': 'Missing chm_cid'}), 400
+
+        logger.info(f"Drone pipeline — ortho={orthomosaic_cid} chm={chm_cid}")
+
+        result = drone_pipeline.process_drone_images(
+            orthomosaic_cid=orthomosaic_cid,
+            chm_cid=chm_cid,
+        )
+
+        logger.info(
+            f"Drone AGB={result['agb']} t/ha  "
+            f"BGB={result['bgb']} t/ha  "
+            f"Trees={result['tree_count']}"
+        )
+
+        return jsonify({'success': True, **result}), 200
+
+    except Exception as e:
+        logger.error(f"Error in drone AGB endpoint: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTE — FUSION  (combines satellite + drone → final carbon stock)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/predict/carbon', methods=['POST'])
+def predict_carbon_endpoint():
+    try:
+        if not models_loaded:
+            return jsonify({'success': False, 'error': 'Models not loaded'}), 500
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'Empty request body'}), 400
+
+        area_ha = float(data.get('area_ha', 1.0))
+        results = {}
+
+        # Satellite AGB
+        if 'agb_features' not in data:
+            return jsonify({'success': False, 'error': 'Missing agb_features'}), 400
+        agb_features = data['agb_features']
+        valid, message = validate_agb_features(agb_features)
+        if not valid:
+            return jsonify({'success': False, 'error': f"AGB validation: {message}"}), 400
+        sat_agb, sat_uncertainty = predict_agb(prepare_agb_features(agb_features))
+        results['satellite_agb']             = round(sat_agb, 2)
+        results['satellite_agb_uncertainty'] = round(sat_uncertainty, 2)
+
+        # SOC
+        if 'soc_features' not in data:
+            return jsonify({'success': False, 'error': 'Missing soc_features'}), 400
+        soc_features = data['soc_features']
+        valid, message = validate_soc_features(soc_features)
+        if not valid:
+            return jsonify({'success': False, 'error': f"SOC validation: {message}"}), 400
+        soc = predict_soc(prepare_soc_features(soc_features))
+        results['soc'] = round(soc, 2)
+
+        # Drone AGB
+        drone_agb         = float(data.get('drone_agb', 0.0))
+        drone_uncertainty = float(data.get('drone_agb_uncertainty', 0.0))
+        results['drone_agb']             = round(drone_agb, 2)
+        results['drone_agb_uncertainty'] = round(drone_uncertainty, 2)
+
+        # ── Inverse Variance Weighting fusion via agb_fusion.py ──────────────
+        if drone_agb > 0:
+            sat_estimate   = AGBEstimate(agb=sat_agb, std_dev=max(sat_uncertainty, 0.01), source="satellite")
+            drone_estimate = AGBEstimate(agb=drone_agb, std_dev=max(drone_uncertainty, 0.01), source="drone")
+            fusion         = fuse_agb(sat_estimate, drone_estimate)
+            fused_agb         = fusion.agb_fused
+            fused_uncertainty = fusion.std_dev
+            results['weight_satellite'] = round(fusion.weight_sat, 4)
+            results['weight_drone']     = round(fusion.weight_drone, 4)
+        else:
+            fused_agb         = sat_agb
+            fused_uncertainty = sat_uncertainty
+
+        bgb = fused_agb * 0.2
+        results['fused_agb']         = round(fused_agb, 2)
+        results['fused_uncertainty'] = round(fused_uncertainty, 2)
+        results['bgb']               = round(bgb, 2)
+
+        # Final carbon stock
+        carbon_stock_t = (fused_agb + bgb + soc) * area_ha
+        co2_equivalent = carbon_stock_t * 3.67
+        results['carbon_stock']   = round(carbon_stock_t, 2)
+        results['co2_equivalent'] = round(co2_equivalent, 2)
+        results['area_ha']        = round(area_ha, 4)
+
+        logger.info(
+            f"Fusion — sat={sat_agb:.2f} drone={drone_agb:.2f} "
+            f"fused={fused_agb:.2f} SOC={soc:.2f} "
+            f"stock={carbon_stock_t:.2f}t CO2e={co2_equivalent:.2f}t"
+        )
+
+        return jsonify({'success': True, **results}), 200
+
+    except Exception as e:
+        logger.error(f"Error in carbon endpoint: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTE — MODEL INFO
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/models/info', methods=['GET'])
 def models_info():
-    """Get information about loaded models."""
-    try:
-        info = {
-            'models_loaded': models_loaded,
-            'models': {}
+    info = {
+        'models_loaded': models_loaded,
+        'models': {}
+    }
+
+    if agb_model is not None:
+        info['models']['agb_satellite'] = {
+            'type':              type(agb_model).__name__,
+            'features_expected': 14,
+            'description':       'Satellite Above Ground Biomass (RF + uncertainty)'
         }
-        
-        if agb_model is not None:
-            info['models']['agb'] = {
-                'type': type(agb_model).__name__,
-                'features_expected': 14,
-                'description': 'Above Ground Biomass (Random Forest with uncertainty estimation)'
-            }
-        
-        if soc_model is not None:
-            info['models']['soc'] = {
-                'type': type(soc_model).__name__,
-                'features_expected': 16,
-                'description': 'Soil Organic Carbon'
-            }
-        
-        return jsonify(info), 200
-        
-    except Exception as e:
-        logger.error(f"Error getting models info: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+
+    if soc_model is not None:
+        info['models']['soc'] = {
+            'type':              type(soc_model).__name__,
+            'features_expected': 16,
+            'description':       'Soil Organic Carbon'
+        }
+
+    if drone_pipeline.crown_predictor is not None:
+        info['models']['crown_detector'] = {
+            'type':        'Detectron2 DefaultPredictor',
+            'description': 'Tree crown instance segmentation'
+        }
+
+    if drone_pipeline.drone_rf_model is not None:
+        info['models']['agb_drone'] = {
+            'type':              type(drone_pipeline.drone_rf_model).__name__,
+            'features_expected': 2,
+            'feature_names':     ['crown_ft', 'height_m'],
+            'description':       'Drone Above Ground Biomass (RF regressor)'
+        }
+
+    return jsonify(info), 200
 
 
 @app.errorhandler(404)
 def not_found(e):
-    """Handle 404 errors."""
     return jsonify({
         'success': False,
         'error': 'Endpoint not found',
         'available_endpoints': [
-            '/health',
-            '/predict/agb',
-            '/predict/soc',
-            '/predict/carbon',
-            '/models/info'
+            'GET  /health',
+            'GET  /models/info',
+            'POST /predict/agb',
+            'POST /predict/soc',
+            'POST /predict/drone_agb',
+            'POST /predict/carbon',
         ]
     }), 404
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main():
-    """Main entry point for the model server."""
-    # Load models on startup
     success, message = load_models()
-    
     if not success:
         logger.error(f"Failed to start server: {message}")
         sys.exit(1)
-    
+
     logger.info("🚀 Starting Carbon Stock Model Server...")
     logger.info(f"📁 Models directory: {MODELS_DIR}")
     logger.info(f"✅ {message}")
     logger.info("🌐 Server running at http://localhost:5000")
     logger.info("📍 Available endpoints:")
-    logger.info("   - GET  /health - Health check")
-    logger.info("   - POST /predict/agb - Predict AGB (14 features)")
-    logger.info("   - POST /predict/soc - Predict SOC (16 features)")
-    logger.info("   - POST /predict/carbon - Predict all carbon components")
-    logger.info("   - GET  /models/info - Get models information")
-    
-    # Run the Flask app
-    app.run(
-        host='0.0.0.0',
-        port=5000,
-        debug=False,
-        use_reloader=False
-    )
+    logger.info("   GET  /health")
+    logger.info("   GET  /models/info")
+    logger.info("   POST /predict/agb        — satellite AGB (14 features)")
+    logger.info("   POST /predict/soc        — SOC (16 features)")
+    logger.info("   POST /predict/drone_agb  — drone pipeline (ortho + CHM CIDs)")
+    logger.info("   POST /predict/carbon     — full fusion + carbon stock")
+
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
 
 if __name__ == '__main__':

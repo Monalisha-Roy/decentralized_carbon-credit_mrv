@@ -12,6 +12,7 @@ import {
 } from "@solana/spl-token";
 import Link from "next/link";
 import { calculateCarbonCredits } from "@/lib/carbonCalculation";
+import DroneUploadPanel, { DroneMetrics } from "@/components/DroneUploadPanel";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -39,11 +40,12 @@ interface CarbonRecord {
   totalCarbonDensity: number;
   carbonStockTc: number;
   carbonStockCo2e: number;
-  previousCarbonStockCo2e: number; // baseline used — 0 means first calculation
-  creditsMinted: number;           // delta-based credits
+  previousCarbonStockCo2e: number;
+  creditsMinted: number;
   timestamp: number;
   authority: string;
   sequenceIndex: number;
+  metadataCid: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -138,6 +140,7 @@ export default function DashboardPage() {
           timestamp: bnToNumber(c.account.timestamp),
           authority: c.account.authority.toBase58(),
           sequenceIndex: bnToNumber(c.account.sequenceIndex),
+          metadataCid: c.account.metadataCid ?? "",
         }));
       setCarbonRecords(formattedCarbon);
 
@@ -166,7 +169,8 @@ export default function DashboardPage() {
 
   // ─── Calculate & Mint ─────────────────────────────────────────────────────
 
-  const handleCalculateCredits = async (land: LandRecord) => {
+  // 1. Update the function signature (was: async (land: LandRecord))
+  const handleCalculateCredits = async (land: LandRecord, droneMetrics?: DroneMetrics | null) => {
     setCalculating(land.landId);
     setCalculationError(null);
     setCalculationResults(null);
@@ -183,7 +187,7 @@ export default function DashboardPage() {
       if (!publicKey) throw new Error("Wallet not connected");
 
       const currentYear = new Date().getFullYear();
-      const startYear = land.lastCalculatedYear === 0 ? 2025 : land.lastCalculatedYear;
+      const startYear = land.lastCalculatedYear === 0 ? 2020 : land.lastCalculatedYear;
 
       if (land.lastCalculatedYear >= currentYear) {
         throw new Error(
@@ -191,6 +195,11 @@ export default function DashboardPage() {
           } (1-year gap required).`
         );
       }
+
+      // Get most recent carbon record for this land
+      const mostRecentRecord = carbonRecords
+        .filter((c) => c.landId === land.landId)
+        .sort((a, b) => b.year - a.year)[0];
 
       const request = {
         landId: land.landId,
@@ -200,7 +209,19 @@ export default function DashboardPage() {
         startYear,
         endYear: currentYear,
         isVerified: land.isVerified,
+        // Pass previous record data to skip startYear satellite fetch
+        lastCarbonStockCo2e: mostRecentRecord?.carbonStockCo2e ?? land.lastCarbonStockCo2e ?? 0,
+        lastAgbDensity: mostRecentRecord?.agbDensity ?? 0,
+        lastBgbDensity: mostRecentRecord?.bgbDensity ?? 0,
+        lastSocDensity: mostRecentRecord?.socDensity ?? 0,
+        ...(droneMetrics && {
+          droneData: {
+            orthomosaicCid: droneMetrics.orthomosaicCid,
+            chmCid: droneMetrics.chmCid,
+          },
+        }),
       };
+
       const result = await calculateCarbonCredits(request);
       setCalculationResults(result.data);
       setCalculatedForLandId(land.landId);
@@ -211,6 +232,8 @@ export default function DashboardPage() {
       console.log("  socChange:", result.data?.carbonChange?.socChange);
       console.log("  totalChange:", result.data?.carbonChange?.totalChange);
       console.log("  status:", result.data?.carbonChange?.status);
+      // 3. Log which AGB source was used
+      console.log("  agbSource:", result.data?.endYear?.agbSource ?? "satellite");
 
       if (!program) throw new Error("Program not initialized");
 
@@ -294,21 +317,71 @@ export default function DashboardPage() {
         }
       }
 
-      // Send deltas to contract — zero and negative deltas are allowed,
-      // contract will record the entry but mint 0 credits
-      const agbDensity = result.data?.carbonChange?.agbChange ?? 0;
-      const bgbDensity = result.data?.carbonChange?.bgbChange ?? 0;
-      const socDensity = result.data?.carbonChange?.socChange ?? 0;
+      // Use absolute end-year values to store on chain
+      const agbDensity    = result.data?.endYear?.carbonPools?.agb ?? 0;
+      const bgbDensity    = result.data?.endYear?.carbonPools?.bgb ?? 0;
+      const socDensity    = result.data?.endYear?.carbonPools?.soc ?? 0;
+      const endYearCo2e   = result.data?.endYear?.co2Equivalent ?? 0;
+      const startYearCo2e = result.data?.startYear?.co2Equivalent ?? 0;
 
-      console.log(`📝 Sending delta densities to contract for year ${currentYear}:`);
-      console.log(`  AGB Δ: ${agbDensity}, BGB Δ: ${bgbDensity}, SOC Δ: ${socDensity}`);
-      console.log(`  Sum of deltas: ${agbDensity + bgbDensity + socDensity}`);
+      console.log(`📝 Sending absolute end-year densities to contract for year ${currentYear}:`);
+      console.log(`  AGB: ${agbDensity}, BGB: ${bgbDensity}, SOC: ${socDensity}`);
+      console.log(`  End Year CO₂e Stock: ${endYearCo2e}`);
 
-      // @ts-ignore
-      let tx;
+      // ── Step 1: Generate certificate and upload to IPFS ───────────────────────
+      let metadataCid = "";
+      try {
+        const certRes = await fetch("/api/generate-certificate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            landId: land.landId,
+            owner: publicKey.toBase58(),
+            areaHectares: land.areaHectares,
+            startYear: result.data?.startYear?.year,
+            endYear: result.data?.endYear?.year,
+            startAgb: result.data?.startYear?.carbonPools?.agb,
+            startBgb: result.data?.startYear?.carbonPools?.bgb,
+            startSoc: result.data?.startYear?.carbonPools?.soc,
+            startCo2e: result.data?.startYear?.co2Equivalent,
+            endAgb: result.data?.endYear?.carbonPools?.agb,
+            endBgb: result.data?.endYear?.carbonPools?.bgb,
+            endSoc: result.data?.endYear?.carbonPools?.soc,
+            endCo2e: result.data?.endYear?.co2Equivalent,
+            agbChange: result.data?.carbonChange?.agbChange,
+            bgbChange: result.data?.carbonChange?.bgbChange,
+            socChange: result.data?.carbonChange?.socChange,
+            co2eChange: result.data?.carbonChange?.co2EquivalentChange,
+            creditsAllocated: result.data?.carbonChange?.creditsAllocated,
+            txSignature: "pending",
+            timestamp: Math.floor(Date.now() / 1000),
+          }),
+        });
+        const certData = await certRes.json();
+        if (certData.success) {
+          metadataCid = certData.metadataCid;
+          console.log("✅ Certificate uploaded to IPFS:", certData.metadataUrl);
+        } else {
+          console.warn("⚠️ Certificate generation failed:", certData.error);
+        }
+      } catch (certErr) {
+        console.warn("⚠️ Certificate generation failed (non-fatal):", certErr);
+      }
+
+      // ── Step 2: Send to contract ──────────────────────────────────────────────
+      let tx: string | undefined;
       try {
         tx = await program.methods
-          .calculateAndMint(land.landId, currentYear, agbDensity, bgbDensity, socDensity)
+          .calculateAndMintV2(
+            land.landId,          // 1. land_id: String
+            currentYear,          // 2. year: u16
+            agbDensity,           // 3. agb_density: f64
+            bgbDensity,           // 4. bgb_density: f64
+            socDensity,           // 5. soc_density: f64
+            endYearCo2e,          // 6. absolute_co2e_end_year: f64
+            startYearCo2e,        // 7. absolute_co2e_start_year: f64
+            metadataCid,          // 8. metadata_cid: String
+          )
           .accounts({
             platformState: PublicKey.findProgramAddressSync(
               [Buffer.from("platform")],
@@ -323,16 +396,11 @@ export default function DashboardPage() {
       } catch (mintError: any) {
         const errorStr = JSON.stringify(mintError);
         const errorMsg = mintError?.message || errorStr;
-
         console.log("🔍 Raw mint error:", mintError);
-        console.log("🔍 Serialized mint error:", errorStr);
-
         if (errorStr.includes("already exists")) {
           throw new Error(`Calculation already exists for ${currentYear}. Wait until next year.`);
         } else if (errorStr.includes("Custom: 0") || errorStr.includes("Custom\":0")) {
-          throw new Error(
-            `Account constraint failed — calculation for ${currentYear} may already exist.`
-          );
+          throw new Error(`Account constraint failed — calculation for ${currentYear} may already exist.`);
         } else if (errorStr.includes("Insufficient lamports")) {
           throw new Error("Insufficient SOL balance.");
         }
@@ -551,28 +619,23 @@ export default function DashboardPage() {
                     </div>
 
                     {/* ── Card Actions ── */}
-                    <div className="px-6 py-3 flex flex-col sm:flex-row gap-2 border-t border-gray-100 bg-gray-50">
+                    <div className="px-6 py-4 flex flex-col gap-3 sm:gap-4 border-t border-gray-100 bg-gradient-to-r from-white to-gray-50">
+                      {canCalculate && (
+                        <DroneUploadPanel
+                          land={land}
+                          calculating={calculating === land.landId}
+                          onDroneProcessed={(metrics) => handleCalculateCredits(land, metrics)}
+                          onSkipDrone={() => handleCalculateCredits(land, null)}
+                        />
+                      )}
                       <Link
                         href={`https://ipfs.io/ipfs/${land.documentCid}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex-1 text-center text-blue-600 hover:text-blue-700 font-medium text-sm py-2 rounded hover:bg-blue-50 transition"
+                        className="text-center text-blue-600 hover:text-blue-700 font-medium text-sm py-2.5 rounded-lg hover:bg-blue-50 transition border border-blue-100"
                       >
                         📄 View Document
                       </Link>
-                      {canCalculate && (
-                        <button
-                          onClick={() => handleCalculateCredits(land)}
-                          disabled={calculating === land.landId}
-                          className="flex-1 bg-green-600 text-white font-medium text-sm py-2 rounded hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                        >
-                          {calculating === land.landId ? (
-                            <><span className="animate-spin">⏳</span> Calculating...</>
-                          ) : (
-                            <>📊 Calculate Credits</>
-                          )}
-                        </button>
-                      )}
                     </div>
 
                     {/* ── Calculation Error ── */}
@@ -810,10 +873,10 @@ export default function DashboardPage() {
                               const delta = (rec.carbonStockCo2e ?? 0) - (rec.previousCarbonStockCo2e ?? 0);
 
                               return (
-                                <div className="mt-4 p-4 bg-white rounded-xl border-2 border-blue-300 space-y-4">
+                                <div className="mt-4 p-4 bg-white rounded-xl border border-blue-200 space-y-3">
 
-                                  {/* Headline row */}
-                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
+                                  {/* Year + Credits */}
+                                  <div className="flex items-center justify-between">
                                     <div>
                                       <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Year</p>
                                       <p className="text-2xl font-bold text-gray-900">{rec.year}</p>
@@ -827,138 +890,42 @@ export default function DashboardPage() {
                                     </div>
                                   </div>
 
-                                  {/* Carbon pool breakdown */}
-                                  <div>
-                                    <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-2">Carbon Pool Densities</p>
-                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                      <div className="bg-orange-50 border border-orange-100 p-3 rounded-lg">
-                                        <p className="text-xs text-orange-600 font-semibold uppercase">Above Ground (AGB)</p>
-                                        <p className="text-xl font-bold text-orange-700 mt-1">{(rec.agbDensity ?? 0).toFixed(2)}</p>
-                                        <p className="text-xs text-orange-500">t C/ha</p>
-                                      </div>
-                                      <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg">
-                                        <p className="text-xs text-blue-600 font-semibold uppercase">Below Ground (BGB)</p>
-                                        <p className="text-xl font-bold text-blue-700 mt-1">{(rec.bgbDensity ?? 0).toFixed(2)}</p>
-                                        <p className="text-xs text-blue-500">t C/ha</p>
-                                      </div>
-                                      <div className="bg-amber-50 border border-amber-100 p-3 rounded-lg">
-                                        <p className="text-xs text-amber-600 font-semibold uppercase">Soil Organic Carbon</p>
-                                        <p className="text-xl font-bold text-amber-700 mt-1">{(rec.socDensity ?? 0).toFixed(2)}</p>
-                                        <p className="text-xs text-amber-500">t C/ha</p>
-                                      </div>
+                                  {/* Key numbers */}
+                                  <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-sm border border-gray-100">
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-500">CO₂e Stock</span>
+                                      <span className="font-semibold text-gray-900">{(rec.carbonStockCo2e ?? 0).toFixed(1)} t</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-500">Previous</span>
+                                      <span className="font-semibold text-gray-900">
+                                        {isFirstCalc
+                                          ? <span className="italic text-gray-400 font-normal">baseline</span>
+                                          : `${(rec.previousCarbonStockCo2e ?? 0).toFixed(1)} t`
+                                        }
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between pt-2 border-t border-gray-200">
+                                      <span className="text-gray-500">Change</span>
+                                      <span className={`font-bold ${delta > 0 ? "text-green-600" : delta < 0 ? "text-red-500" : "text-gray-400"}`}>
+                                        {isFirstCalc ? "—" : `${delta > 0 ? "+" : ""}${delta.toFixed(1)} t CO₂e`}
+                                      </span>
                                     </div>
                                   </div>
 
-                                  {/* Carbon stock absolute values */}
-                                  <div>
-                                    <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-2">Absolute Carbon Stock</p>
-                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                      <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                        <p className="text-xs text-gray-500 font-semibold uppercase">Total Density</p>
-                                        <p className="text-base font-bold text-gray-800 mt-1">{(rec.totalCarbonDensity ?? 0).toFixed(2)} t C/ha</p>
-                                      </div>
-                                      <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                                        <p className="text-xs text-gray-500 font-semibold uppercase">Carbon Stock</p>
-                                        <p className="text-base font-bold text-gray-800 mt-1">{(rec.carbonStockTc ?? 0).toFixed(1)} t C</p>
-                                      </div>
-                                      <div className="bg-green-50 p-3 rounded-lg border border-green-200">
-                                        <p className="text-xs text-green-600 font-semibold uppercase">CO₂ Equivalent</p>
-                                        <p className="text-base font-bold text-green-700 mt-1">{(rec.carbonStockCo2e ?? 0).toFixed(1)} t CO₂e</p>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  {/* Delta credit calculation */}
-                                  <div>
-                                    <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-2">
-                                      Credit Calculation (Delta Method)
-                                    </p>
-                                    <div className={`p-4 rounded-xl border-2 text-sm space-y-2 ${isFirstCalc
-                                        ? "bg-blue-50 border-blue-200"
-                                        : delta > 0
-                                          ? "bg-green-50 border-green-200"
-                                          : "bg-amber-50 border-amber-200"
-                                      }`}>
-                                      {isFirstCalc ? (
-                                        <>
-                                          <p className="font-semibold text-blue-700">📌 Baseline Establishment (First Calculation)</p>
-                                          <p className="text-gray-700">
-                                            This is the first measurement for this plot. The carbon stock is recorded as the baseline.
-                                          </p>
-                                          <div className="mt-2 pt-2 border-t border-blue-200 grid grid-cols-2 gap-2">
-                                            <div>
-                                              <span className="text-gray-500 text-xs">CO₂e Stock:</span>
-                                              <p className="font-bold text-blue-700">{(rec.carbonStockCo2e ?? 0).toFixed(1)} t CO₂e</p>
-                                            </div>
-                                            <div>
-                                              <span className="text-gray-500 text-xs">Credits Minted:</span>
-                                              <p className="font-bold text-blue-700">+{(rec.creditsMinted ?? 0).toLocaleString()}</p>
-                                            </div>
-                                          </div>
-                                        </>
-                                      ) : delta > 0 ? (
-                                        <>
-                                          <p className="font-semibold text-green-700">🌱 Carbon Sequestration Detected</p>
-                                          <p className="text-gray-700">
-                                            Carbon stock increased from the previous measurement. Credits issued for the net increase only.
-                                          </p>
-                                          <div className="mt-2 pt-2 border-t border-green-200 space-y-1">
-                                            <div className="flex justify-between">
-                                              <span className="text-gray-600">Previous stock (baseline):</span>
-                                              <span className="font-semibold">{(rec.previousCarbonStockCo2e ?? 0).toFixed(1)} t CO₂e</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                              <span className="text-gray-600">Current stock:</span>
-                                              <span className="font-semibold">{(rec.carbonStockCo2e ?? 0).toFixed(1)} t CO₂e</span>
-                                            </div>
-                                            <div className="flex justify-between font-bold text-green-700 pt-1 border-t border-green-200">
-                                              <span>Sequestration (Δ):</span>
-                                              <span>+{delta.toFixed(1)} t CO₂e → +{(rec.creditsMinted ?? 0).toLocaleString()} credits</span>
-                                            </div>
-                                          </div>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <p className="font-semibold text-amber-700">⚠️ No Net Sequestration</p>
-                                          <p className="text-gray-700">
-                                            Carbon stock did not increase from the previous measurement. No credits issued.
-                                          </p>
-                                          <div className="mt-2 pt-2 border-t border-amber-200 space-y-1">
-                                            <div className="flex justify-between">
-                                              <span className="text-gray-600">Previous stock:</span>
-                                              <span className="font-semibold">{(rec.previousCarbonStockCo2e ?? 0).toFixed(1)} t CO₂e</span>
-                                            </div>
-                                            <div className="flex justify-between">
-                                              <span className="text-gray-600">Current stock:</span>
-                                              <span className="font-semibold">{(rec.carbonStockCo2e ?? 0).toFixed(1)} t CO₂e</span>
-                                            </div>
-                                            <div className="flex justify-between font-bold text-amber-700 pt-1 border-t border-amber-200">
-                                              <span>Change:</span>
-                                              <span>{delta.toFixed(1)} t CO₂e → 0 credits</span>
-                                            </div>
-                                          </div>
-                                        </>
-                                      )}
-                                      <p className="text-xs text-gray-400 mt-1">
-                                        Rate: 1 credit = 1 tonne CO₂e increase
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  {/* Authority + Timestamp */}
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-gray-100">
-                                    <div>
-                                      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Calculated By</p>
-                                      <p className="text-sm font-mono bg-gray-100 p-2 rounded text-gray-700">
-                                        {shortenAddress(rec.authority)}
-                                      </p>
-                                      <p className="text-xs text-gray-400 mt-1 break-all">{rec.authority}</p>
-                                    </div>
-                                    <div>
-                                      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Calculation Date</p>
-                                      <p className="text-sm font-semibold text-gray-900">{formatTimestamp(rec.timestamp)}</p>
-                                      <p className="text-xs text-gray-400 mt-1">On-chain record #{rec.sequenceIndex + 1}</p>
-                                    </div>
+                                  {/* Links */}
+                                  <div className="space-y-2 pt-1">
+                                    {rec.metadataCid && (
+                                      <a
+                                        href={`/certificate/${rec.metadataCid}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center justify-between w-full text-sm text-blue-600 hover:text-blue-800 font-medium bg-blue-50 border border-blue-200 px-3 py-2.5 rounded-lg hover:bg-blue-100 transition"
+                                      >
+                                        <span>📄 View Full Certificate</span>
+                                        <span className="text-xs text-blue-400">IPFS →</span>
+                                      </a>
+                                    )}
                                   </div>
 
                                 </div>
@@ -967,7 +934,8 @@ export default function DashboardPage() {
                           </div>
                         )}
                       </div>
-                    )}
+                    )
+                    }
 
                   </div>
                 );
@@ -976,6 +944,6 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
-    </div>
+    </div >
   );
 }

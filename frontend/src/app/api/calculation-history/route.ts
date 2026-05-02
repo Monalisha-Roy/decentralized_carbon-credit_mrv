@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     const connection = new web3.Connection(rpcUrl);
 
     // Get the program ID from IDL
-    const programId = new web3.PublicKey('4XgM7JHxi24iXdAs2ykKrWtwZXM9X5rfxKd8dcUZk8Kr');
+    const programId = new web3.PublicKey('8fYcCBJkiV8JTzWcKLH32GAWsg85q7hYdq7H2BqkZg6q');
 
     // Fetch all carbon records for this land from the blockchain
     // This is done by scanning all carbon records and filtering by land_id

@@ -1,3 +1,4 @@
+
 import { NextRequest, NextResponse } from 'next/server';
 import ee from '@google/earthengine';
 import { PublicKey } from '@solana/web3.js';
@@ -5,6 +6,7 @@ import {
   ensureInitialized,
 } from '@/lib/earthEngine';
 
+export const maxDuration = 300;
 /**
  * Carbon Monitoring API
  * Fetches satellite data for carbon stock calculation
@@ -18,13 +20,14 @@ interface CarbonDataPoint {
   year: number;
   totalAreaHa: number;
   carbonPools: {
-    agb: number; // Above Ground Biomass (tonnes/ha)
-    bgb: number; // Below Ground Biomass (tonnes/ha)
-    soc: number; // Soil Organic Carbon (tonnes/ha)
+    agb: number;
+    bgb: number;
+    soc: number;
   };
-  totalCarbonDensity: number; // Total carbon density (t/ha)
-  totalCarbonStock: number; // Total carbon stock in tonnes
-  co2Equivalent: number; // CO2 equivalent in tonnes
+  totalCarbonDensity: number;
+  totalCarbonStock: number;
+  co2Equivalent: number;
+  agbSource?: 'drone' | 'satellite';
 }
 
 /**
@@ -59,10 +62,10 @@ async function getLandRecordFromBlockchain(
     // This would typically use the Anchor program instance to fetch the PDA
     // For now, we'll return a placeholder that should be called from the client
     // In production, this should be fetched server-side from an RPC endpoint
-    
+
     // The landId is deterministic: first 16 chars of IPFS CID
     // PDA seed: [Buffer.from("land"), Buffer.from(landId)]
-    
+
     throw new Error(
       'Land records must be fetched from the frontend and passed to this API. ' +
       'Pass: { landId: string, landRecordData: LandRecord, startYear, endYear }'
@@ -141,14 +144,14 @@ async function getGeometryFromIPFS(ipfsCid: string): Promise<GeometryData> {
 async function calculatePolygonArea(geometry: any): Promise<number> {
   await ensureInitialized();
   const polygon = ee.Geometry.Polygon(geometry.coordinates);
-  
+
   const areaM2 = await new Promise<number>((resolve, reject) => {
     (polygon as any).area({ maxError: 1 }).evaluate((value: number, error: any) => {
       if (error) reject(error);
       else resolve(value);
     });
   });
-  
+
   return areaM2 / 10000; // Convert to hectares
 }
 
@@ -178,19 +181,19 @@ async function getSatelliteFeatures(
 ): Promise<any> {
   try {
     await ensureInitialized();
-    
+
     const polygon = ee.Geometry.Polygon(geometry.coordinates);
-    
+
     // Parse the year from startDate and handle current/future years
     const requestedYear = parseInt(startDate.split('-')[0]);
     const currentYear = new Date().getFullYear();
     const currentMonth = new Date().getMonth() + 1; // 1-indexed
-    
+
     // If requesting current year, only use data up to the previous month
     // If requesting future year, fall back to last year's full data
     let effectiveStartDate = startDate;
     let effectiveEndDate = endDate;
-    
+
     if (requestedYear > currentYear) {
       // Future year - use previous year's data
       const fallbackYear = currentYear - 1;
@@ -203,42 +206,42 @@ async function getSatelliteFeatures(
       effectiveEndDate = `${currentYear}-${String(safeMonth).padStart(2, '0')}-28`;
       console.log(`📡 AGB features: Using current year data up to month ${safeMonth}`);
     }
-    
+
     // Get Sentinel-2 data and calculate NDVI
     const s2Collection = (ee as any).ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
       .filterBounds(polygon)
       .filterDate(effectiveStartDate, effectiveEndDate)
       .filter((ee as any).Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
-    
+
     // Check if Sentinel-2 collection has images with timeout
     console.log('🔄 Checking Sentinel-2 availability...');
     const s2Size = await new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Sentinel-2 size check timed out')), 45000);
+      const timeout = setTimeout(() => reject(new Error('Sentinel-2 size check timed out')), 90000);
       s2Collection.size().evaluate((value: number, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     if (s2Size === 0) {
       throw new Error(`No Sentinel-2 data available for the period ${effectiveStartDate} to ${effectiveEndDate}. Try selecting an earlier year.`);
     }
-    
+
     console.log(`📡 Found ${s2Size} Sentinel-2 images for period ${effectiveStartDate} to ${effectiveEndDate}`);
-    
+
     const s2Image = s2Collection.median();
-    
+
     // Calculate NDVI
     const nir = s2Image.select('B8');
     const red = s2Image.select('B4');
     const ndvi = nir.subtract(red).divide(nir.add(red)).rename('NDVI');
-    
+
     // Select optical bands and scale to reflectance
     const opticalBands = s2Image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B11', 'B12'])
       .divide(10000)
       .addBands(ndvi);
-    
+
     // Get Sentinel-1 SAR data
     const s1Collection = (ee as any).ImageCollection('COPERNICUS/S1_GRD')
       .filterBounds(polygon)
@@ -246,49 +249,49 @@ async function getSatelliteFeatures(
       .filter((ee as any).Filter.listContains('transmitterReceiverPolarisation', 'VV'))
       .filter((ee as any).Filter.listContains('transmitterReceiverPolarisation', 'VH'))
       .filter((ee as any).Filter.eq('instrumentMode', 'IW'));
-    
+
     // Check if Sentinel-1 collection has images with timeout
     console.log('🔄 Checking Sentinel-1 availability...');
     const s1Size = await new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Sentinel-1 size check timed out')), 45000);
+      const timeout = setTimeout(() => reject(new Error('Sentinel-1 size check timed out')), 90000);
       s1Collection.size().evaluate((value: number, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     if (s1Size === 0) {
       throw new Error(`No Sentinel-1 data available for the period ${effectiveStartDate} to ${effectiveEndDate}. Try selecting an earlier year.`);
     }
-    
+
     console.log(`📡 Found ${s1Size} Sentinel-1 images for period ${effectiveStartDate} to ${effectiveEndDate}`);
-    
+
     const s1Image = s1Collection.median();
-    
+
     // Get terrain data (elevation, slope)
     const dem = (ee as any).Image('USGS/SRTMGL1_003');
     const elevation = dem.select('elevation');
     const slope = (ee as any).Terrain.slope(elevation);
-    
+
     // Get centroid coordinates with timeout
     console.log('🔄 Fetching centroid coordinates...');
     const centroid = (polygon as any).centroid();
     const centroidCoords = await new Promise<any>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Centroid coordinate fetch timed out')), 45000);
+      const timeout = setTimeout(() => reject(new Error('Centroid coordinate fetch timed out')), 90000);
       centroid.coordinates().evaluate((value: any, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     // Combine all bands
     const allBands = opticalBands
       .addBands(s1Image.select(['VV', 'VH']))
       .addBands(elevation)
       .addBands(slope.rename('slope'));
-    
+
     // Calculate mean values for the polygon with timeout
     console.log('🔄 Computing statistics for satellite bands...');
     const stats = allBands.reduceRegion({
@@ -297,16 +300,16 @@ async function getSatelliteFeatures(
       scale: 10,
       maxPixels: 1e13,
     });
-    
+
     const result = await new Promise<any>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Statistics computation timed out')), 60000);
+      const timeout = setTimeout(() => reject(new Error('Statistics computation timed out')), 120000);
       stats.evaluate((value: any, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     return {
       latitude: centroidCoords[1],
       longitude: centroidCoords[0],
@@ -346,50 +349,50 @@ async function getSOCSatelliteFeatures(
 ): Promise<any> {
   try {
     await ensureInitialized();
-    
+
     const polygon = ee.Geometry.Polygon(geometry.coordinates);
-    
+
     // For current/future years, use the previous year's data
     const currentYear = new Date().getFullYear();
     const dataYear = year >= currentYear ? currentYear - 1 : year;
     const startDate = `${dataYear}-01-01`;
     const endDate = `${dataYear}-12-31`;
-    
+
     console.log(`📡 SOC features: Using year ${dataYear} for data (requested ${year})`);
-    
+
     // Get Sentinel-2 data
     const s2Collection = (ee as any).ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
       .filterBounds(polygon)
       .filterDate(startDate, endDate)
       .filter((ee as any).Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
-    
+
     // Check if collection has images with timeout
     console.log('🔄 Checking Sentinel-2 availability for SOC...');
     const s2Size = await new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Sentinel-2 size check timed out')), 45000);
+      const timeout = setTimeout(() => reject(new Error('Sentinel-2 size check timed out')), 90000);
       s2Collection.size().evaluate((value: number, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     if (s2Size === 0) {
       throw new Error(`No Sentinel-2 data available for year ${dataYear}. Try selecting a different year.`);
     }
-    
+
     const s2Image = s2Collection.median();
-    
+
     // Calculate NDVI
     const nir = s2Image.select('B8');
     const red = s2Image.select('B4');
     const ndvi = nir.subtract(red).divide(nir.add(red)).rename('NDVI');
-    
+
     // Select required optical bands (B2, B3, B4, B8, B11) and scale
     const opticalBands = s2Image.select(['B2', 'B3', 'B4', 'B8', 'B11'])
       .divide(10000)
       .addBands(ndvi);
-    
+
     // Get Sentinel-1 SAR data (VV, VH)
     const s1Collection = (ee as any).ImageCollection('COPERNICUS/S1_GRD')
       .filterBounds(polygon)
@@ -397,37 +400,37 @@ async function getSOCSatelliteFeatures(
       .filter((ee as any).Filter.listContains('transmitterReceiverPolarisation', 'VV'))
       .filter((ee as any).Filter.listContains('transmitterReceiverPolarisation', 'VH'))
       .filter((ee as any).Filter.eq('instrumentMode', 'IW'));
-    
+
     // Check if collection has images with timeout
     console.log('🔄 Checking Sentinel-1 availability for SOC...');
     const s1Size = await new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Sentinel-1 size check timed out')), 45000);
+      const timeout = setTimeout(() => reject(new Error('Sentinel-1 size check timed out')), 90000);
       s1Collection.size().evaluate((value: number, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     if (s1Size === 0) {
       throw new Error(`No Sentinel-1 data available for year ${dataYear}. Try selecting a different year.`);
     }
-    
+
     const s1Image = s1Collection.median();
-    
+
     // Get terrain data (elevation, slope, aspect)
     const dem = (ee as any).Image('USGS/SRTMGL1_003');
     const elevation = dem.select('elevation');
     const slope = (ee as any).Terrain.slope(elevation);
     const aspect = (ee as any).Terrain.aspect(elevation);
-    
+
     // Get annual precipitation from CHIRPS
     const chirps = (ee as any).ImageCollection('UCSB-CHG/CHIRPS/DAILY')
       .filterBounds(polygon)
       .filterDate(startDate, endDate)
       .sum()  // Sum daily precipitation for annual total
       .rename('precip_annual');
-    
+
     // Get mean temperature from ERA5-Land (convert from Kelvin to Celsius)
     const era5 = (ee as any).ImageCollection('ECMWF/ERA5_LAND/MONTHLY_AGGR')
       .filterBounds(polygon)
@@ -436,30 +439,30 @@ async function getSOCSatelliteFeatures(
       .mean()
       .subtract(273.15)  // Convert K to C
       .rename('temp_mean');
-    
+
     // Get soil texture from OpenLandMap
     const soilTexture = (ee as any).Image('OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02')
       .select('b0')  // Top layer texture class
       .rename('soil_texture');
-    
+
     // Get bulk density from OpenLandMap (for SOC calculation)
     const bulkDensity = (ee as any).Image('OpenLandMap/SOL/SOL_BULKDENS-FINEEARTH_USDA-4A1H_M/v02')
       .select('b0')  // Top layer bulk density (cg/cm³)
       .divide(100)  // Convert to g/cm³
       .rename('bulk_density');
-    
+
     // Get centroid coordinates with timeout
     console.log('🔄 Fetching centroid coordinates for SOC...');
     const centroid = (polygon as any).centroid();
     const centroidCoords = await new Promise<any>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Centroid coordinate fetch timed out')), 45000);
+      const timeout = setTimeout(() => reject(new Error('Centroid coordinate fetch timed out')), 90000);
       centroid.coordinates().evaluate((value: any, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-    
+
     // Combine all bands
     const allBands = opticalBands
       .addBands(s1Image.select(['VV', 'VH']))
@@ -470,7 +473,7 @@ async function getSOCSatelliteFeatures(
       .addBands(era5)
       .addBands(soilTexture)
       .addBands(bulkDensity);
-    
+
     // Calculate mean values for the polygon with timeout
     console.log('🔄 Computing statistics for SOC satellite bands...');
     const stats = allBands.reduceRegion({
@@ -479,38 +482,38 @@ async function getSOCSatelliteFeatures(
       scale: 30,  // Use 30m resolution for mixed data sources
       maxPixels: 1e13,
     });
-    
+
     const result = await new Promise<any>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Statistics computation timed out')), 90000);
+      const timeout = setTimeout(() => reject(new Error('Statistics computation timed out')), 180000);
       stats.evaluate((value: any, error: any) => {
         clearTimeout(timeout);
         if (error) reject(error);
         else resolve(value);
       });
     });
-  
-  console.log('SOC features extracted:', result);
-  
-  // Return 16 features expected by SOC model (matching TABLE II)
-  return {
-    B2: result.B2 || 0,
-    B3: result.B3 || 0,
-    B4: result.B4 || 0,
-    B8: result.B8 || 0,
-    B11: result.B11 || 0,
-    NDVI: result.NDVI || 0,
-    VV: result.VV || 0,
-    VH: result.VH || 0,
-    elevation: result.elevation || 0,
-    slope: result.slope || 0,
-    aspect: result.aspect || 0,
-    precip_annual: result.precip_annual || 0,
-    temp_mean: result.temp_mean || 0,
-    soil_texture: result.soil_texture || 0,
-    latitude: centroidCoords[1],
-    longitude: centroidCoords[0],
-    bulk_density: result.bulk_density || 1.3,  // Default bulk density if not available
-  };
+
+    console.log('SOC features extracted:', result);
+
+    // Return 16 features expected by SOC model (matching TABLE II)
+    return {
+      B2: result.B2 || 0,
+      B3: result.B3 || 0,
+      B4: result.B4 || 0,
+      B8: result.B8 || 0,
+      B11: result.B11 || 0,
+      NDVI: result.NDVI || 0,
+      VV: result.VV || 0,
+      VH: result.VH || 0,
+      elevation: result.elevation || 0,
+      slope: result.slope || 0,
+      aspect: result.aspect || 0,
+      precip_annual: result.precip_annual || 0,
+      temp_mean: result.temp_mean || 0,
+      soil_texture: result.soil_texture || 0,
+      latitude: centroidCoords[1],
+      longitude: centroidCoords[0],
+      bulk_density: result.bulk_density || 1.3,  // Default bulk density if not available
+    };
   } catch (error: any) {
     console.error('Error in getSOCSatelliteFeatures:', error);
     const errorMsg = error?.message || String(error) || 'Unknown error';
@@ -533,18 +536,18 @@ async function getBiomassData(
 }> {
   try {
     const MODEL_SERVER_URL = process.env.MODEL_SERVER_URL || 'http://localhost:5000';
-    
+
     // Use full year range for satellite data (Jan 1 to Dec 31)
     const startStr = `${year}-01-01`;
     const endStr = `${year}-12-31`;
-    
+
     console.log(`🛰️ Fetching satellite features for year ${year} (${startStr} to ${endStr})`);
-    
+
     // Fetch satellite features
     const features = await getSatelliteFeatures(geometry, startStr, endStr);
-    
+
     console.log(`🤖 Calling local model server for AGB prediction...`);
-    
+
     // Call local model server
     const response = await fetch(`${MODEL_SERVER_URL}/predict/agb`, {
       method: 'POST',
@@ -553,18 +556,18 @@ async function getBiomassData(
       },
       body: JSON.stringify({ features }),
     });
-    
+
     if (!response.ok) {
       const error = await response.text();
       throw new Error(`Model server error: ${error}`);
     }
-    
+
     const result = await response.json();
-    
+
     if (!result.success) {
       throw new Error(result.error || 'Model prediction failed');
     }
-    
+
     return {
       agb: parseFloat(result.agb.toFixed(2)),
       bgb: parseFloat(result.bgb.toFixed(2)),
@@ -586,14 +589,14 @@ async function getBiomassData(
 async function getSOCData(geometry: any, year: number): Promise<number> {
   try {
     const MODEL_SERVER_URL = process.env.MODEL_SERVER_URL || 'http://localhost:5000';
-    
+
     console.log(`🛰️ Fetching SOC-specific satellite features for year ${year}...`);
-    
+
     // Fetch SOC-specific satellite features (16 features)
     const features = await getSOCSatelliteFeatures(geometry, year);
-    
+
     console.log(`Calling local model server for SOC prediction...`);
-    
+
     // Call local model server
     const response = await fetch(`${MODEL_SERVER_URL}/predict/soc`, {
       method: 'POST',
@@ -602,18 +605,18 @@ async function getSOCData(geometry: any, year: number): Promise<number> {
       },
       body: JSON.stringify({ features }),
     });
-    
+
     if (!response.ok) {
       const error = await response.text();
       throw new Error(`Model server error: ${error}`);
     }
-    
+
     const result = await response.json();
-    
+
     if (!result.success) {
       throw new Error(result.error || 'Model prediction failed');
     }
-    
+
     return parseFloat(result.soc.toFixed(2));
   } catch (error: any) {
     if (error.code === 'ECONNREFUSED') {
@@ -626,39 +629,82 @@ async function getSOCData(geometry: any, year: number): Promise<number> {
   }
 }
 
+async function getDroneAGBData(
+  orthomosaicCid: string,
+  chmCid: string
+): Promise<{ agb: number; bgb: number; agb_uncertainty: number }> {
+  const MODEL_SERVER_URL = process.env.MODEL_SERVER_URL || 'http://localhost:5000';
+
+  console.log('🚁 Calling drone pipeline on model server...');
+
+  const response = await fetch(`${MODEL_SERVER_URL}/predict/drone_agb`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ orthomosaic_cid: orthomosaicCid, chm_cid: chmCid }),
+    signal: AbortSignal.timeout(600000), // 10 minutes for large GeoTIFF files
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Drone model server error: ${error}`);
+  }
+
+  const result = await response.json();
+  if (!result.success) throw new Error(result.error || 'Drone prediction failed');
+
+  console.log(`🚁 Drone AGB=${result.agb} t/ha BGB=${result.bgb} t/ha uncertainty=${result.agb_uncertainty}`);
+
+  return {
+    agb: parseFloat(result.agb.toFixed(2)),
+    bgb: parseFloat(result.bgb.toFixed(2)),
+    agb_uncertainty: parseFloat(result.agb_uncertainty.toFixed(2)),
+  };
+}
+
 /**
  * Get carbon monitoring data for a specific year
  */
 async function getCarbonDataForYear(
   geometry: any,
   year: number,
-  totalAreaHa: number
+  totalAreaHa: number,
+  droneData?: { orthomosaicCid: string; chmCid: string }
 ): Promise<CarbonDataPoint> {
   try {
     console.log(`Fetching carbon data for year: ${year}`);
     console.log(`Total area: ${totalAreaHa.toFixed(2)} ha`);
-    
+
     // Get biomass data (AGB and BGB) using full year
+    // Get biomass data — drone pipeline if CIDs provided, else satellite
     console.log(`Fetching biomass data...`);
-    const biomassData = await getBiomassData(geometry, year);
-    console.log(`Biomass data: AGB=${biomassData.agb} t/ha, BGB=${biomassData.bgb} t/ha`);
-    
+    let biomassData: { agb: number; bgb: number };
+    let agbSource: 'drone' | 'satellite' = 'satellite';
+
+    if (droneData?.orthomosaicCid && droneData?.chmCid) {
+      console.log(`🚁 Using drone pipeline for AGB (year ${year})`);
+      biomassData = await getDroneAGBData(droneData.orthomosaicCid, droneData.chmCid);
+      agbSource = 'drone';
+    } else {
+      biomassData = await getBiomassData(geometry, year);
+    }
+    console.log(`Biomass data [${agbSource}]: AGB=${biomassData.agb} t/ha, BGB=${biomassData.bgb} t/ha`);
+
     // Get SOC data using full year
     console.log(`Fetching SOC data...`);
     const soc = await getSOCData(geometry, year);
     console.log(`SOC data: ${soc} t/ha`);
-    
+
     // Calculate total carbon density (t/ha) = AGB + BGB + SOC
     const carbonDensity = biomassData.agb + biomassData.bgb + soc;
-    
+
     // Calculate total carbon stock for the entire area (tonnes)
     const totalCarbonStock = carbonDensity * totalAreaHa;
-    
+
     // Calculate CO2 equivalent (multiply by 3.67)
     const co2Equivalent = totalCarbonStock * 3.67;
-    
+
     console.log(`Year ${year}: Carbon density=${carbonDensity.toFixed(2)} t/ha, Total=${totalCarbonStock.toFixed(2)} tonnes, CO2eq=${co2Equivalent.toFixed(2)} tonnes`);
-    
+
     return {
       year,
       totalAreaHa: parseFloat(totalAreaHa.toFixed(2)),
@@ -670,6 +716,7 @@ async function getCarbonDataForYear(
       totalCarbonDensity: parseFloat(carbonDensity.toFixed(2)),
       totalCarbonStock: parseFloat(totalCarbonStock.toFixed(2)),
       co2Equivalent: parseFloat(co2Equivalent.toFixed(2)),
+      agbSource,
     };
   } catch (error: any) {
     console.error(`Error fetching carbon data for year ${year}:`, error);
@@ -680,12 +727,15 @@ async function getCarbonDataForYear(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { landId, polygonCoordinates, areaHectares, publicKey, startYear, endYear, isVerified } = body;
-
+    const {
+      landId, polygonCoordinates, areaHectares, publicKey,
+      startYear, endYear, isVerified, droneData,
+      lastCarbonStockCo2e, lastAgbDensity, lastBgbDensity, lastSocDensity
+    } = body;
     // Validate required parameters
     if (!landId || !polygonCoordinates || !areaHectares || !publicKey || !startYear || !endYear) {
       return NextResponse.json(
-        { 
+        {
           error: 'Missing required parameters',
           required: ['landId', 'polygonCoordinates', 'areaHectares', 'publicKey', 'startYear', 'endYear'],
           received: Object.keys(body)
@@ -775,11 +825,76 @@ export async function POST(request: NextRequest) {
     // Use registered area from blockchain for consistency
     const areaForCalculation = areaHectares;
 
-    // Fetch data for both years in parallel
-    const [startData, endData] = await Promise.all([
-      getCarbonDataForYear(geometry, startYear, areaForCalculation),
-      getCarbonDataForYear(geometry, endYear, areaForCalculation),
-    ]);
+    // If land has a previous calculation, skip startYear fetch
+    const previousCo2e = body.lastCarbonStockCo2e ?? 0;
+
+    // If previous calculation exists, use on-chain data as startYear
+let startData;
+const hasPreviousCalc = lastCarbonStockCo2e && lastCarbonStockCo2e > 0;
+
+if (hasPreviousCalc) {
+  console.log(`♻️ Using on-chain previous record as startYear — skipping satellite fetch`);
+  const lastTotalDensity = (lastAgbDensity ?? 0) + (lastBgbDensity ?? 0) + (lastSocDensity ?? 0);
+  startData = {
+    year: startYear,
+    totalAreaHa: areaForCalculation,
+    carbonPools: {
+      agb: lastAgbDensity ?? 0,
+      bgb: lastBgbDensity ?? 0,
+      soc: lastSocDensity ?? 0,
+    },
+    totalCarbonDensity: lastTotalDensity,
+    totalCarbonStock: lastCarbonStockCo2e / 3.67,
+    co2Equivalent: lastCarbonStockCo2e,
+    agbSource: 'satellite' as const,
+  };
+} else {
+  console.log(`🛰️ First calculation — fetching startYear from satellite`);
+  startData = await getCarbonDataForYear(geometry, startYear, areaForCalculation);
+}
+
+// ── Satellite pipeline for endYear first (no drone) ───────────────────────
+console.log(`🛰️ Fetching satellite data for endYear ${endYear}...`);
+const endDataSatellite = await getCarbonDataForYear(geometry, endYear, areaForCalculation);
+
+  // ── Drone pipeline for endYear after satellite completes ──────────────────
+  let endData = endDataSatellite;
+  if (droneData?.orthomosaicCid && droneData?.chmCid) {
+    console.log(`🚁 Satellite complete — now starting drone pipeline for endYear ${endYear}...`);
+    try {
+      const droneResult = await getDroneAGBData(droneData.orthomosaicCid, droneData.chmCid);
+
+      // Fuse satellite AGB + drone AGB using inverse variance weighting
+      const satVar   = Math.max(endDataSatellite.carbonPools.agb * 0.1, 0.01) ** 2;
+      const droneVar = Math.max(droneResult.agb_uncertainty, 0.01) ** 2;
+      const wSat     = 1 / satVar;
+      const wDrone   = 1 / droneVar;
+      const fusedAgb = (wSat * endDataSatellite.carbonPools.agb + wDrone * droneResult.agb) / (wSat + wDrone);
+      const fusedBgb = fusedAgb * 0.2;
+
+      const fusedTotalDensity = fusedAgb + fusedBgb + endDataSatellite.carbonPools.soc;
+      const fusedStockTc      = fusedTotalDensity * areaForCalculation;
+      const fusedCo2e         = fusedStockTc * 3.67;
+
+      endData = {
+        ...endDataSatellite,
+        carbonPools: {
+          agb: parseFloat(fusedAgb.toFixed(2)),
+          bgb: parseFloat(fusedBgb.toFixed(2)),
+          soc: endDataSatellite.carbonPools.soc,
+        },
+        totalCarbonDensity: parseFloat(fusedTotalDensity.toFixed(2)),
+        totalCarbonStock:   parseFloat(fusedStockTc.toFixed(2)),
+        co2Equivalent:      parseFloat(fusedCo2e.toFixed(2)),
+        agbSource: 'drone' as const,
+      };
+
+      console.log(`✅ Fusion complete — Sat AGB=${endDataSatellite.carbonPools.agb} Drone AGB=${droneResult.agb} Fused AGB=${fusedAgb.toFixed(2)}`);
+    } catch (droneErr: any) {
+      console.warn(`⚠️ Drone pipeline failed — falling back to satellite only: ${droneErr.message}`);
+      endData = endDataSatellite;
+    }
+  }
 
     // Calculate time period
     const yearsDifference = endYear - startYear;
@@ -788,18 +903,18 @@ export async function POST(request: NextRequest) {
     // ─── Carbon Stock Change Calculation ─────────────────────────────────────
     // Step 1: Subtract start year total from end year total to get change
     const carbonStockChange = endData.totalCarbonStock - startData.totalCarbonStock;
-    
+
     // Step 2: If positive, convert to CO2 equivalent (1 tonne C = 3.67 tonne CO2e)
     const carbonStockChangeInCO2e = carbonStockChange * 3.67;
-    
+
     // Step 3: Credits allocated = CO2e change (only if positive)
     const creditsAllocated = carbonStockChange > 0 ? carbonStockChangeInCO2e : 0;
-    
-    const carbonStockChangePercent = startData.totalCarbonStock > 0 
-      ? (carbonStockChange / startData.totalCarbonStock) * 100 
+
+    const carbonStockChangePercent = startData.totalCarbonStock > 0
+      ? (carbonStockChange / startData.totalCarbonStock) * 100
       : 0;
-    const annualCarbonChange = yearsDifference > 0 
-      ? carbonStockChange / yearsDifference 
+    const annualCarbonChange = yearsDifference > 0
+      ? carbonStockChange / yearsDifference
       : 0;
 
     return NextResponse.json({
@@ -867,7 +982,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('❌ Error in carbon monitoring:', error);
-    
+
     // Extract error message safely
     const errorMsg = error?.message || String(error) || 'Unknown error';
     let statusCode = 500;
@@ -912,3 +1027,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+getDroneAGBData

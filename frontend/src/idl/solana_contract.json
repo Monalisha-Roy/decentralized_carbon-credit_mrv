@@ -1,5 +1,5 @@
 {
-  "address": "4XgM7JHxi24iXdAs2ykKrWtwZXM9X5rfxKd8dcUZk8Kr",
+  "address": "8fYcCBJkiV8JTzWcKLH32GAWsg85q7hYdq7H2BqkZg6q",
   "metadata": {
     "name": "solana_contract",
     "version": "0.1.0",
@@ -125,6 +125,145 @@
       ],
       "args": [
         {
+          "name": "_land_id",
+          "type": "string"
+        },
+        {
+          "name": "_year",
+          "type": "u16"
+        },
+        {
+          "name": "_agb_density",
+          "type": "f64"
+        },
+        {
+          "name": "_bgb_density",
+          "type": "f64"
+        },
+        {
+          "name": "_soc_density",
+          "type": "f64"
+        }
+      ]
+    },
+    {
+      "name": "calculate_and_mint_v2",
+      "discriminator": [
+        221,
+        165,
+        19,
+        249,
+        44,
+        109,
+        193,
+        199
+      ],
+      "accounts": [
+        {
+          "name": "platform_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  108,
+                  97,
+                  116,
+                  102,
+                  111,
+                  114,
+                  109
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "land_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "land_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "carbon_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  97,
+                  114,
+                  98,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "land_id"
+              },
+              {
+                "kind": "arg",
+                "path": "year"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner_token_account",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
           "name": "land_id",
           "type": "string"
         },
@@ -143,6 +282,18 @@
         {
           "name": "soc_density",
           "type": "f64"
+        },
+        {
+          "name": "_absolute_co2e_end_year",
+          "type": "f64"
+        },
+        {
+          "name": "absolute_co2e_start_year",
+          "type": "f64"
+        },
+        {
+          "name": "metadata_cid",
+          "type": "string"
         }
       ]
     },
@@ -489,6 +640,11 @@
       "code": 6013,
       "name": "NoCarbonIncrease",
       "msg": "No carbon increase detected - credits only allocated for carbon gains"
+    },
+    {
+      "code": 6014,
+      "name": "DeprecatedFunction",
+      "msg": "This function is deprecated - use calculate_and_mint_v2 instead"
     }
   ],
   "types": [
@@ -548,6 +704,10 @@
           {
             "name": "sequence_index",
             "type": "u32"
+          },
+          {
+            "name": "metadata_cid",
+            "type": "string"
           },
           {
             "name": "bump",

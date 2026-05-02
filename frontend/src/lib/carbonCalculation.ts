@@ -5,6 +5,11 @@
 
 import { PublicKey } from '@solana/web3.js';
 
+export interface DroneData {
+  orthomosaicCid: string;
+  chmCid: string;
+}
+
 export interface CarbonCalculationRequest {
   landId: string;
   polygonCoordinates: Array<[number, number]>;  // Array of [longitude, latitude] pairs
@@ -13,6 +18,11 @@ export interface CarbonCalculationRequest {
   startYear: number;
   endYear: number;
   isVerified: boolean;
+  droneData?: DroneData;
+  lastCarbonStockCo2e?: number;
+  lastAgbDensity?: number;
+  lastBgbDensity?: number;
+  lastSocDensity?: number;
 }
 
 export interface CarbonPoolData {
@@ -28,6 +38,7 @@ export interface CarbonDataPoint {
   totalCarbonDensity: number; // Total carbon density (t/ha)
   totalCarbonStock: number; // Total carbon stock in tonnes
   co2Equivalent: number; // CO2 equivalent in tonnes
+  agbSource?: 'drone' | 'satellite'; // which source was used for AGB
 }
 
 export interface CarbonChangeData {
@@ -39,6 +50,7 @@ export interface CarbonChangeData {
   percentChange: number;
   annualChange: number;
   co2EquivalentChange: number;
+  creditsAllocated: number;
   status: 'Carbon Gain' | 'Carbon Loss' | 'No Change';
 }
 
@@ -77,13 +89,16 @@ export interface CarbonMonitoringResponse {
 
 /**
  * Calculate carbon credits for a verified land
- * 
+ *
  * This function orchestrates the entire pipeline:
  * 1. Validates the land is verified
  * 2. Fetches satellite data from Earth Engine
  * 3. Runs ML models to predict carbon pools
+ *    - If droneData is provided, AGB comes from allometric model (more accurate)
+ *    - Otherwise AGB comes from satellite XGBoost model
+ *    - SOC always comes from satellite model
  * 4. Returns comprehensive carbon analysis
- * 
+ *
  * @param request - Carbon calculation request parameters
  * @returns Carbon monitoring data with AGB, BGB, SOC predictions
  */
@@ -117,10 +132,15 @@ export async function calculateCarbonCredits(
       throw new Error('Area must be greater than 0');
     }
 
-    console.log(`🌍 Initiating carbon calculation for land: ${request.landId}`);
-    console.log(`   Owner: ${request.publicKey}`);
-    console.log(`   Period: ${request.startYear} to ${request.endYear}`);
-    console.log(`   Area: ${request.areaHectares} hectares`);
+    console.log(` Initiating carbon calculation for land: ${request.landId}`);
+    console.log(` Owner: ${request.publicKey}`);
+    console.log(` Period: ${request.startYear} to ${request.endYear}`);
+    console.log(` Area: ${request.areaHectares} hectares`);
+    if (request.droneData) {
+      console.log(`  Drone data provided — AGB will use drone pipeline`);
+      console.log(`  Orthomosaic CID: ${request.droneData.orthomosaicCid}`);
+      console.log(`  CHM CID: ${request.droneData.chmCid}`);
+    }
 
     // Call the carbon monitoring API
     const response = await fetch('/api/carbon-monitoring', {
@@ -128,7 +148,7 @@ export async function calculateCarbonCredits(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(request), // droneData is included here if present
     });
 
     if (!response.ok) {
@@ -147,6 +167,7 @@ export async function calculateCarbonCredits(
     }
 
     console.log('✅ Carbon calculation completed successfully');
+    console.log(`   AGB source: ${data.data?.endYear.agbSource ?? 'satellite'}`);
     console.log(`   AGB: ${data.data?.startYear.carbonPools.agb} t/ha`);
     console.log(`   SOC: ${data.data?.startYear.carbonPools.soc} t/ha`);
     console.log(`   Total Carbon: ${data.data?.startYear.totalCarbonStock} tonnes`);
@@ -180,7 +201,7 @@ CO₂ Equivalent: ${data.co2Equivalent.toFixed(2)} tonnes
  * Calculate carbon credits from carbon stock
  * Standard conversion: 1 tonne of carbon = 1 carbon credit (in many systems)
  * CO₂ equivalent: carbon × 3.67
- * 
+ *
  * @param totalCarbonStock - Total carbon in tonnes
  * @param creditPrice - Price per carbon credit in USD (optional)
  * @returns Carbon credits and optional value
@@ -205,7 +226,7 @@ export function calculateCreditsFromCarbon(
 export function getDefaultCalculationYears(): { startYear: number; endYear: number } {
   const currentYear = new Date().getFullYear();
   return {
-    startYear: currentYear - 1, // Use previous year if current isn't complete
+    startYear: currentYear - 1,
     endYear: currentYear,
   };
 }

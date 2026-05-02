@@ -6,7 +6,7 @@ import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import idl from "@/idl/solana_contract.json";
 
-const PROGRAM_ID = new PublicKey("4XgM7JHxi24iXdAs2ykKrWtwZXM9X5rfxKd8dcUZk8Kr");
+const PROGRAM_ID = new PublicKey("8fYcCBJkiV8JTzWcKLH32GAWsg85q7hYdq7H2BqkZg6q");
 
 interface AnchorContextType {
   program: Program | null;
