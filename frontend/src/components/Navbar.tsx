@@ -3,20 +3,28 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useState } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((m) => m.WalletMultiButton),
   { ssr: false }
 );
 
+// Administrator public key
+const ADMIN_ADDRESS = process.env.NEXT_PUBLIC_ADMIN_ADDRESS || "Bjt92NdnruXKVhT1WwxYuzDC8SUwmMyXShrmAKjcPfDM";
+
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
+  const { publicKey } = useWallet();
+
+  // Check if current user is admin
+  const isAdmin = publicKey?.toBase58() === ADMIN_ADDRESS;
 
   const navLinks = [
     { href: "/", label: "Home" },
     { href: "/register", label: "Register Land" },
     { href: "/dashboard", label: "My Lands" },
-    { href: "/authority", label: "Authority" },
+    ...(isAdmin ? [{ href: "/authority", label: "Authority" }] : []),
   ];
 
   return (

@@ -285,6 +285,22 @@ export default function CertificatePage() {
               </div>
             </div>
 
+            {/* Credit Calculation Breakdown */}
+            <div className="rounded-lg p-4 bg-amber-50 border border-amber-200 space-y-2">
+              <p className="text-[#8b5a2b] text-xs uppercase tracking-widest cert-accent font-semibold">Credit Calculation Details</p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="bg-white rounded p-2 border border-amber-100">
+                  <p className="text-[#8b7355] cert-accent mb-1">CO₂e Delta</p>
+                  <p className="text-[#5a7d2a] font-semibold text-sm cert-font">{co2eChange.toFixed(2)} t</p>
+                </div>
+                <div className="bg-white rounded p-2 border border-amber-100">
+                  <p className="text-[#8b7355] cert-accent mb-1">Credits Allocated</p>
+                  <p className="text-[#3a5f1a] font-semibold text-sm cert-font">{credits}</p>
+                </div>
+              </div>
+              <p className="text-[#8b5a2b] text-xs cert-accent italic">1 credit = 1 tonne CO₂e increase</p>
+            </div>
+
             {/* Details grid - Land & Verification inside certificate */}
             <div className="grid grid-cols-2 gap-2 border-t border-[#c19a6b] border-opacity-30 pt-3">
               {/* Land details card */}

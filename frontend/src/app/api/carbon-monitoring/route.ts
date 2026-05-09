@@ -908,7 +908,9 @@ const endDataSatellite = await getCarbonDataForYear(geometry, endYear, areaForCa
     const carbonStockChangeInCO2e = carbonStockChange * 3.67;
 
     // Step 3: Credits allocated = CO2e change (only if positive)
-    const creditsAllocated = carbonStockChange > 0 ? carbonStockChangeInCO2e : 0;
+    // ⚠️ IMPORTANT: Use Math.floor (truncation) to match Rust contract behavior (as u64)
+    // This ensures certificate credits match blockchain minted credits
+    const creditsAllocated = carbonStockChange > 0 ? Math.floor(carbonStockChangeInCO2e) : 0;
 
     const carbonStockChangePercent = startData.totalCarbonStock > 0
       ? (carbonStockChange / startData.totalCarbonStock) * 100
@@ -943,7 +945,7 @@ const endDataSatellite = await getCarbonDataForYear(geometry, endYear, areaForCa
           percentChange: parseFloat(carbonStockChangePercent.toFixed(2)),
           annualChange: parseFloat(annualCarbonChange.toFixed(2)),
           co2EquivalentChange: parseFloat(carbonStockChangeInCO2e.toFixed(2)),      // tonnes CO2e
-          creditsAllocated: parseFloat(creditsAllocated.toFixed(0)),                 // only if positive
+          creditsAllocated: creditsAllocated,                                        // truncated integer, matches contract
           // Status
           status: carbonStockChange > 0 ? 'Carbon Gain' : carbonStockChange < 0 ? 'Carbon Loss' : 'No Change',
         },

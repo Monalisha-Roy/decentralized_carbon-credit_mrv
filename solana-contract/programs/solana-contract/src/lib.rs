@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
 
-declare_id!("8fYcCBJkiV8JTzWcKLH32GAWsg85q7hYdq7H2BqkZg6q");
+declare_id!("AAr6VXB2EWKHiSCXndGCA3GsGMgAWHDLBBQ1btVTHwCd");
 
 // 1 tonne C = 3.667 tonnes CO2e
 const CO2E_FACTOR: f64 = 3.667;
@@ -127,7 +127,7 @@ pub mod solana_contract {
 
         let total_carbon_density = agb_density + bgb_density + soc_density;
         let carbon_stock_tc = total_carbon_density * land.area_hectares;
-        let carbon_stock_co2e_absolute = carbon_stock_tc * CO2E_FACTOR;
+        let carbon_stock_co2e_absolute = _absolute_co2e_end_year;
 
         // Use on-chain value for subsequent calcs, passed startYear for first calc
         let baseline_co2e = if land.last_carbon_stock_co2e > 0.0 {

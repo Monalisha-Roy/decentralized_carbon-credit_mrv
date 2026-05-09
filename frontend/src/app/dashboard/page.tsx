@@ -12,7 +12,7 @@ import {
 } from "@solana/spl-token";
 import Link from "next/link";
 import { calculateCarbonCredits } from "@/lib/carbonCalculation";
-import DroneUploadPanel, { DroneMetrics } from "@/components/DroneUploadPanel";
+// import DroneUploadPanel, { DroneMetrics } from "@/components/DroneUploadPanel"; // HIDDEN: Satellite-only mode
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -328,9 +328,10 @@ export default function DashboardPage() {
       console.log(`  AGB: ${agbDensity}, BGB: ${bgbDensity}, SOC: ${socDensity}`);
       console.log(`  End Year CO₂e Stock: ${endYearCo2e}`);
 
-      // ── Step 1: Generate certificate and upload to IPFS ───────────────────────
+      // ── Step 1: Generate certificate first to get CID ───────────────────────────────
       let metadataCid = "";
       try {
+        console.log("📄 Generating certificate...");
         const certRes = await fetch("/api/generate-certificate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -353,22 +354,25 @@ export default function DashboardPage() {
             socChange: result.data?.carbonChange?.socChange,
             co2eChange: result.data?.carbonChange?.co2EquivalentChange,
             creditsAllocated: result.data?.carbonChange?.creditsAllocated,
-            txSignature: "pending",
+            txSignature: "", // Empty for now, will include after transaction
             timestamp: Math.floor(Date.now() / 1000),
           }),
         });
+        if (!certRes.ok) {
+          throw new Error(`Certificate generation failed: ${certRes.status}`);
+        }
         const certData = await certRes.json();
         if (certData.success) {
           metadataCid = certData.metadataCid;
-          console.log("✅ Certificate uploaded to IPFS:", certData.metadataUrl);
+          console.log("✅ Certificate CID generated:", metadataCid);
         } else {
           console.warn("⚠️ Certificate generation failed:", certData.error);
         }
       } catch (certErr) {
-        console.warn("⚠️ Certificate generation failed (non-fatal):", certErr);
+        console.warn("⚠️ Certificate generation error:", certErr);
       }
 
-      // ── Step 2: Send to contract ──────────────────────────────────────────────
+      // ── Step 2: Send to contract with certificate CID ─────────────────────────────
       let tx: string | undefined;
       try {
         tx = await program.methods
@@ -380,7 +384,7 @@ export default function DashboardPage() {
             socDensity,           // 5. soc_density: f64
             endYearCo2e,          // 6. absolute_co2e_end_year: f64
             startYearCo2e,        // 7. absolute_co2e_start_year: f64
-            metadataCid,          // 8. metadata_cid: String
+            metadataCid,          // 8. metadata_cid: String (now has certificate CID)
           )
           .accounts({
             platformState: PublicKey.findProgramAddressSync(
@@ -393,6 +397,7 @@ export default function DashboardPage() {
             authority: publicKey,
           })
           .rpc({ skipPreflight: true });
+        console.log("✅ Transaction sent! Sig:", tx);
       } catch (mintError: any) {
         const errorStr = JSON.stringify(mintError);
         const errorMsg = mintError?.message || errorStr;
@@ -405,6 +410,20 @@ export default function DashboardPage() {
           throw new Error("Insufficient SOL balance.");
         }
         throw new Error(errorMsg || "Transaction failed");
+      }
+
+      // ── Step 3: Wait for confirmation ─────────────────────────────────────────────
+      try {
+        console.log("⏳ Waiting for transaction confirmation...");
+        const latestBlockhash = await connection.getLatestBlockhash();
+        await connection.confirmTransaction({
+          signature: tx,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        });
+        console.log("✅ Transaction confirmed!");
+      } catch (confirmErr) {
+        console.warn("⚠️ Transaction confirmation warning:", confirmErr);
       }
 
       console.log("✅ Record saved on-chain! Transaction:", tx);
@@ -621,12 +640,13 @@ export default function DashboardPage() {
                     {/* ── Card Actions ── */}
                     <div className="px-6 py-4 flex flex-col gap-3 sm:gap-4 border-t border-gray-100 bg-gradient-to-r from-white to-gray-50">
                       {canCalculate && (
-                        <DroneUploadPanel
-                          land={land}
-                          calculating={calculating === land.landId}
-                          onDroneProcessed={(metrics) => handleCalculateCredits(land, metrics)}
-                          onSkipDrone={() => handleCalculateCredits(land, null)}
-                        />
+                        <button
+                          onClick={() => handleCalculateCredits(land, null)}
+                          disabled={calculating === land.landId}
+                          className="w-full bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition font-semibold text-center disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {calculating === land.landId ? "⏳ Calculating..." : "🛰️ Calculate Carbon Credits (Satellite)"}
+                        </button>
                       )}
                       <Link
                         href={`https://ipfs.io/ipfs/${land.documentCid}`}
@@ -912,6 +932,14 @@ export default function DashboardPage() {
                                       </span>
                                     </div>
                                   </div>
+
+                                  {/* Note about certificate */}
+                                  {!isFirstCalc && rec.metadataCid && (
+                                    <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                                      <p className="text-xs text-blue-700 font-semibold mb-2">📊 Full Calculation Details</p>
+                                      <p className="text-xs text-blue-600 mb-3">View the certificate to see detailed credit calculation breakdown and CO₂e change.</p>
+                                    </div>
+                                  )}
 
                                   {/* Links */}
                                   <div className="space-y-2 pt-1">
