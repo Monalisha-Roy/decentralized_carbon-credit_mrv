@@ -100,10 +100,10 @@ export default function DroneUploadPanel({
   };
 
   // ── Hardcoded OFO dataset CIDs ────────────────────────────────────────────
-const HARDCODED_DRONE_METRICS: DroneMetrics = {
-  orthomosaicCid: "bafybeid6cz6oblwon5ou7jhyrw4obcvhrcwnchjueed6omq736ohk4ve34",
-  chmCid:         "bafybeiblcfcahcqtz4vavuc2bvsh5rqrhqnkpy4yalgag7fkrz2hmymxc4",
-};
+  const HARDCODED_DRONE_METRICS: DroneMetrics = {
+    orthomosaicCid: "bafybeid6cz6oblwon5ou7jhyrw4obcvhrcwnchjueed6omq736ohk4ve34",
+    chmCid: "bafybeiblcfcahcqtz4vavuc2bvsh5rqrhqnkpy4yalgag7fkrz2hmymxc4",
+  };
 
   // ── Collapsed pill ────────────────────────────────────────────────────────
   // ── Collapsed pill ────────────────────────────────────────────────────────
@@ -127,11 +127,11 @@ const HARDCODED_DRONE_METRICS: DroneMetrics = {
           <button
             onClick={() => {
               setShowDroneWarning(false);
-              onDroneProcessed(HARDCODED_DRONE_METRICS);
+              setExpanded(true);
             }}
             disabled={calculating}
             className="px-4 py-2.5 text-sm font-semibold text-sky-700 bg-sky-100 border border-sky-300 rounded-lg hover:bg-sky-200 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm whitespace-nowrap"
-            title="Calculate with drone pipeline (OFO dataset)"
+            title="Upload drone imagery files"
           >
             🚁 Add Drone Data
           </button>

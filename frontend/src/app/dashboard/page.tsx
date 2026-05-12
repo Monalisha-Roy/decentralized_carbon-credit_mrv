@@ -12,7 +12,7 @@ import {
 } from "@solana/spl-token";
 import Link from "next/link";
 import { calculateCarbonCredits } from "@/lib/carbonCalculation";
-// import DroneUploadPanel, { DroneMetrics } from "@/components/DroneUploadPanel"; // HIDDEN: Satellite-only mode
+import DroneUploadPanel, { DroneMetrics } from "@/components/DroneUploadPanel"; // HIDDEN: Satellite-only mode
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -94,6 +94,7 @@ export default function DashboardPage() {
   const [calculationResults, setCalculationResults] = useState<any>(null);
   const [calculationError, setCalculationError] = useState<string | null>(null);
   const [calculatedForLandId, setCalculatedForLandId] = useState<string | null>(null);
+  const [droneMetrics, setDroneMetrics] = useState<DroneMetrics | null>(null);
 
   // ─── Fetch Dashboard ──────────────────────────────────────────────────────
 
@@ -318,10 +319,10 @@ export default function DashboardPage() {
       }
 
       // Use absolute end-year values to store on chain
-      const agbDensity    = result.data?.endYear?.carbonPools?.agb ?? 0;
-      const bgbDensity    = result.data?.endYear?.carbonPools?.bgb ?? 0;
-      const socDensity    = result.data?.endYear?.carbonPools?.soc ?? 0;
-      const endYearCo2e   = result.data?.endYear?.co2Equivalent ?? 0;
+      const agbDensity = result.data?.endYear?.carbonPools?.agb ?? 0;
+      const bgbDensity = result.data?.endYear?.carbonPools?.bgb ?? 0;
+      const socDensity = result.data?.endYear?.carbonPools?.soc ?? 0;
+      const endYearCo2e = result.data?.endYear?.co2Equivalent ?? 0;
       const startYearCo2e = result.data?.startYear?.co2Equivalent ?? 0;
 
       console.log(`📝 Sending absolute end-year densities to contract for year ${currentYear}:`);
@@ -640,13 +641,12 @@ export default function DashboardPage() {
                     {/* ── Card Actions ── */}
                     <div className="px-6 py-4 flex flex-col gap-3 sm:gap-4 border-t border-gray-100 bg-gradient-to-r from-white to-gray-50">
                       {canCalculate && (
-                        <button
-                          onClick={() => handleCalculateCredits(land, null)}
-                          disabled={calculating === land.landId}
-                          className="w-full bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition font-semibold text-center disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {calculating === land.landId ? "⏳ Calculating..." : "🛰️ Calculate Carbon Credits (Satellite)"}
-                        </button>
+                        <DroneUploadPanel
+                          land={{ landId: land.landId }}
+                          onDroneProcessed={(metrics) => handleCalculateCredits(land, metrics)}
+                          onSkipDrone={() => handleCalculateCredits(land, null)}
+                          calculating={calculating === land.landId}
+                        />
                       )}
                       <Link
                         href={`https://ipfs.io/ipfs/${land.documentCid}`}

@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../.env.local"))
 
 import pickle
+import joblib
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -72,35 +73,30 @@ def load_drone_models(models_dir: Path) -> Tuple[bool, str]:
     global crown_predictor, drone_rf_model
 
     try:
-        # ── Crown detector ────────────────────────────────────────────────────
-        crown_pkl_path  = models_dir / "crown_detector_model.pkl"
-        weights_path    = models_dir / "model_final.pth"
+        weights_path = models_dir / "crown_detection_model.pth"
 
-        if not crown_pkl_path.exists():
-            raise FileNotFoundError(f"crown_detector_model.pkl not found at {crown_pkl_path}")
         if not weights_path.exists():
-            raise FileNotFoundError(f"model_final.pth not found at {weights_path}")
+            raise FileNotFoundError(f"crown_detection_model.pth not found at {weights_path}")
 
-        with open(crown_pkl_path, "rb") as f:
-            crown_meta = pickle.load(f)
-
-        # crown_meta keys: config (YAML str), model_weights_path, gsd_ft
+        from detectron2 import model_zoo
         cfg = get_cfg()
-        cfg.merge_from_other_cfg(cfg.load_cfg(crown_meta["config"]))
-        cfg.MODEL.WEIGHTS        = str(weights_path)   # override stored path
-        cfg.MODEL.DEVICE         = "cpu"               # safe default; GPU if available
-        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
+        cfg.merge_from_file(model_zoo.get_config_file(
+            "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+        ))
+        cfg.MODEL.WEIGHTS                     = str(weights_path)
+        cfg.MODEL.DEVICE                      = "cpu"
+        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.50
+        cfg.MODEL.ROI_HEADS.NUM_CLASSES       = 1
 
         crown_predictor = DefaultPredictor(cfg)
         logger.info("✅ Crown detector (Detectron2) loaded successfully")
 
         # ── Drone RF regressor ────────────────────────────────────────────────
-        drone_rf_path = models_dir / "agb_drone_regressor_model.pkl"
+        drone_rf_path = models_dir / "drone_agb_model.pkl"
         if not drone_rf_path.exists():
-            raise FileNotFoundError(f"agb_drone_regressor_model.pkl not found at {drone_rf_path}")
+            raise FileNotFoundError(f"drone_agb_model.pkl not found at {drone_rf_path}")
 
-        with open(drone_rf_path, "rb") as f:
-            drone_rf_model = pickle.load(f)
+        drone_rf_model = joblib.load(drone_rf_path)
 
         logger.info("✅ Drone RF regressor loaded successfully")
         return True, "Drone models loaded successfully"
@@ -254,53 +250,55 @@ def _detect_crowns(ortho_path: str) -> List[np.ndarray]:
 # 5.  CHM HEIGHT SAMPLING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sample_chm_at_centroid(
+def _sample_chm_for_crown(
     chm_dataset: rasterio.DatasetReader,
-    cx_px: float,
-    cy_px: float
+    rgb_x1: float, rgb_y1: float,
+    rgb_x2: float, rgb_y2: float,
+    rgb_width: int, rgb_height: int,
 ) -> float:
     """
-    Sample the CHM raster at the centroid pixel (cx_px, cy_px) of a crown.
-    Returns height in metres.  Falls back to 10.0 m if out-of-bounds or nodata.
+    Extract 95th percentile canopy height from CHM for a detected crown.
+    Scales RGB bounding box into CHM space before sampling.
     """
     DEFAULT_HEIGHT_M = 10.0
-
     try:
-        row = int(round(cy_px))
-        col = int(round(cx_px))
+        chm_w = chm_dataset.width
+        chm_h = chm_dataset.height
 
-        if not (0 <= row < chm_dataset.height and 0 <= col < chm_dataset.width):
-            return DEFAULT_HEIGHT_M
+        scale_x = chm_w / rgb_width
+        scale_y = chm_h / rgb_height
 
-        window = rasterio.windows.Window(col, row, 1, 1)
-        data   = chm_dataset.read(1, window=window)
-        value  = float(data[0, 0])
+        chm_x1 = max(0, int(rgb_x1 * scale_x))
+        chm_y1 = max(0, int(rgb_y1 * scale_y))
+        chm_x2 = max(chm_x1 + 1, min(int(rgb_x2 * scale_x), chm_w))
+        chm_y2 = max(chm_y1 + 1, min(int(rgb_y2 * scale_y), chm_h))
 
-        # Handle nodata / negative values
+        window = rasterio.windows.Window(
+            chm_x1, chm_y1,
+            chm_x2 - chm_x1,
+            chm_y2 - chm_y1
+        )
+        data = chm_dataset.read(1, window=window).astype(float)
+
         nodata = chm_dataset.nodata
-        if (nodata is not None and math.isclose(value, nodata)) or value < 0:
+        if nodata is not None:
+            data = data[data != nodata]
+        data = data[data > 0]
+
+        if data.size == 0:
             return DEFAULT_HEIGHT_M
 
-        return max(value, 0.5)   # guard against near-zero heights
-
+        return float(np.percentile(data, 95))
     except Exception:
         return DEFAULT_HEIGHT_M
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6.  PER-TREE RF PREDICTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _predict_tree_agb(crown_ft: float, height_m: float) -> Tuple[float, float]:
-    """
-    Run the drone RF regressor on a single tree.
-    Input features: [crown_ft, height_m]  (order matters — no feature names stored)
-
-    Returns:
-        (mean_log_agb, uncertainty_sd)  — model outputs log-space AGB
-    """
-    features = np.array([[crown_ft, height_m]], dtype=np.float32)
-
+def _predict_tree_agb(height_m: float, crown_area_px: float) -> Tuple[float, float]:
+    # Feature order must match training: ['height', 'crown_area']
+    features = np.array([[height_m, crown_area_px]], dtype=np.float32)
     per_tree_preds = np.array([
         est.predict(features)[0] for est in drone_rf_model.estimators_
     ])
@@ -315,21 +313,6 @@ def _predict_tree_agb(crown_ft: float, height_m: float) -> Tuple[float, float]:
 def process_drone_images(orthomosaic_cid: str, chm_cid: str) -> Dict:
     """
     Full drone pipeline.
-
-    Args:
-        orthomosaic_cid: Pinata IPFS CID of the orthomosaic GeoTIFF
-        chm_cid:         Pinata IPFS CID of the CHM GeoTIFF
-
-    Returns:
-        {
-            "agb":             float  (t/ha)
-            "bgb":             float  (t/ha)
-            "agb_uncertainty": float  (t/ha, combined SD)
-            "tree_count":      int
-            "mean_crown_ft":   float
-            "mean_height_m":   float
-            "per_tree":        [ { id, crown_ft, height_m, agb_kg } ]
-        }
     """
     ortho_path = None
     chm_path   = None
@@ -343,7 +326,7 @@ def process_drone_images(orthomosaic_cid: str, chm_cid: str) -> Dict:
         chm_path = _fetch_cid_to_tempfile(chm_cid, suffix=".tif")
 
         # ── Step 2: Read GSD from orthomosaic ────────────────────────────────
-        gsd_m = _read_gsd_metres(ortho_path)
+        gsd_m  = _read_gsd_metres(ortho_path)
         gsd_ft = gsd_m / METRES_PER_FOOT
         logger.info(f"GSD: {gsd_m:.5f} m/px  ({gsd_ft:.5f} ft/px)")
 
@@ -354,57 +337,67 @@ def process_drone_images(orthomosaic_cid: str, chm_cid: str) -> Dict:
             raise ValueError("No tree crowns detected in the orthomosaic")
 
         # ── Step 4 & 5: For each crown sample CHM + run RF ───────────────────
-        per_tree      = []
-        agb_values    = []
-        agb_sds       = []
-        crown_widths  = []
-        heights       = []
+        per_tree    = []
+        agb_values  = []
+        agb_sds     = []
+        crown_areas = []
+        heights     = []
+
+        # Get RGB dimensions for CHM scaling
+        with rasterio.open(ortho_path) as ortho_src:
+            rgb_w = ortho_src.width
+            rgb_h = ortho_src.height
 
         with rasterio.open(chm_path) as chm_ds:
             for i, box in enumerate(boxes):
                 x1, y1, x2, y2 = box
 
-                # Crown width in feet (average of width and height of bbox)
-                crown_px = ((x2 - x1) + (y2 - y1)) / 2.0
-                crown_ft = float(crown_px * gsd_ft)
+                # Crown area in pixels — matches training feature 'crown_area'
+                crown_area_px = float((x2 - x1) * (y2 - y1))
 
-                # Centroid pixel for CHM sampling
-                cx_px = (x1 + x2) / 2.0
-                cy_px = (y1 + y2) / 2.0
-                height_m = _sample_chm_at_centroid(chm_ds, cx_px, cy_px)
+                # 95th percentile height over scaled crown region
+                height_m = _sample_chm_for_crown(
+                    chm_ds,
+                    x1, y1, x2, y2,
+                    rgb_w, rgb_h
+                )
 
-                # RF prediction → log-space AGB
-                mean_log_agb, sd_log_agb = _predict_tree_agb(crown_ft, height_m)
+                # RF prediction — features: [height, crown_area]
+                mean_log_agb, sd_log_agb = _predict_tree_agb(height_m, crown_area_px)
 
-                # Back-transform from log space
-                agb_kg = float(np.exp(mean_log_agb))
+                # Detect whether model outputs raw kg or log(kg)
+                if mean_log_agb > 20:
+                    agb_kg = float(mean_log_agb)   # raw kg
+                else:
+                    agb_kg = float(np.exp(mean_log_agb))   # log space → back-transform
 
+                # Safety clamp — no single tree should exceed 50,000 kg
+                agb_kg = min(agb_kg, 50_000.0)
                 agb_values.append(agb_kg)
                 agb_sds.append(sd_log_agb)
-                crown_widths.append(crown_ft)
+                crown_areas.append(crown_area_px)
                 heights.append(height_m)
 
                 per_tree.append({
-                    "id":        i,
-                    "crown_ft":  round(crown_ft, 2),
-                    "height_m":  round(height_m, 2),
-                    "agb_kg":    round(agb_kg, 2),
+                    "id":            i,
+                    "crown_area_px": round(crown_area_px, 2),
+                    "height_m":      round(height_m, 2),
+                    "agb_kg":        round(agb_kg, 2),
                 })
 
         # ── Step 6: Aggregate to per-hectare density ──────────────────────────
-        # Estimate area covered by the orthomosaic in hectares
         with rasterio.open(ortho_path) as src:
-            area_m2  = src.width * src.height * (gsd_m ** 2)
-            area_ha  = area_m2 / 10_000.0
+            area_m2 = src.width * src.height * (gsd_m ** 2)
+            area_ha = area_m2 / 10_000.0
 
-        tree_count       = len(agb_values)
-        total_agb_kg     = sum(agb_values)
-        agb_per_ha_t     = (total_agb_kg / 1000.0) / max(area_ha, 0.001)
-        bgb_per_ha_t     = agb_per_ha_t * 0.2
+        tree_count      = len(agb_values)
+        total_agb_kg    = sum(agb_values)
+        agb_per_ha_t = (total_agb_kg / 1000.0) / max(area_ha, 0.001)
+        agb_per_ha_t = min(agb_per_ha_t, 1000.0)  # clamp — prevents Infinity reaching JSON
+        bgb_per_ha_t    = agb_per_ha_t * 0.2
 
-        # Combined uncertainty: propagate per-tree SDs in quadrature → t/ha
         combined_sd_log  = math.sqrt(sum(s ** 2 for s in agb_sds)) / tree_count
-        uncertainty_t_ha = agb_per_ha_t * combined_sd_log   # approx delta method
+        uncertainty_t_ha = agb_per_ha_t * combined_sd_log
 
         logger.info(
             f"Drone pipeline complete — {tree_count} trees | "
@@ -418,9 +411,9 @@ def process_drone_images(orthomosaic_cid: str, chm_cid: str) -> Dict:
             "bgb":             round(bgb_per_ha_t, 2),
             "agb_uncertainty": round(uncertainty_t_ha, 2),
             "tree_count":      tree_count,
-            "mean_crown_ft":   round(float(np.mean(crown_widths)), 2),
+            "mean_crown_area": round(float(np.mean(crown_areas)), 2),
             "mean_height_m":   round(float(np.mean(heights)), 2),
-            "per_tree":        per_tree[:50],  # cap at 50 for response size
+            "per_tree":        per_tree[:50],
         }
 
     finally:
