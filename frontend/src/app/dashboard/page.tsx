@@ -319,13 +319,13 @@ export default function DashboardPage() {
       }
 
       // Use absolute end-year values to store on chain
-      const agbDensity = result.data?.endYear?.carbonPools?.agb ?? 0;
-      const bgbDensity = result.data?.endYear?.carbonPools?.bgb ?? 0;
-      const socDensity = result.data?.endYear?.carbonPools?.soc ?? 0;
+      const agbDensity = (result.data?.endYear?.carbonPools?.agb ?? 0) / land.areaHectares;
+      const bgbDensity = (result.data?.endYear?.carbonPools?.bgb ?? 0) / land.areaHectares;
+      const socDensity = (result.data?.endYear?.carbonPools?.soc ?? 0) / land.areaHectares;
       const endYearCo2e = result.data?.endYear?.co2Equivalent ?? 0;
       const startYearCo2e = result.data?.startYear?.co2Equivalent ?? 0;
 
-      console.log(`📝 Sending absolute end-year densities to contract for year ${currentYear}:`);
+      console.log(`📝 Sending end-year densities (t/ha) to contract for year ${currentYear}:`);
       console.log(`  AGB: ${agbDensity}, BGB: ${bgbDensity}, SOC: ${socDensity}`);
       console.log(`  End Year CO₂e Stock: ${endYearCo2e}`);
 
@@ -547,7 +547,22 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {lands.map((land) => {
+              {lands
+                .sort((a, b) => {
+                  // Sort by registration date (latest registered first)
+                  // Use earliest carbon record timestamp as proxy for registration
+                  const aCarbon = carbonRecords
+                    .filter((c) => c.landId === a.landId)
+                    .sort((x, y) => x.timestamp - y.timestamp)[0];
+                  const bCarbon = carbonRecords
+                    .filter((c) => c.landId === b.landId)
+                    .sort((x, y) => x.timestamp - y.timestamp)[0];
+
+                  const aTime = aCarbon?.timestamp ?? Infinity; // Lands with no records go to bottom
+                  const bTime = bCarbon?.timestamp ?? Infinity;
+                  return bTime - aTime; // Latest (most recent timestamp) first
+                })
+                .map((land) => {
                 const landCarbon = carbonRecords
                   .filter((c) => c.landId === land.landId)
                   .sort((a, b) => b.year - a.year);
@@ -693,15 +708,15 @@ export default function DashboardPage() {
                             <div className="space-y-2 text-sm">
                               <div className="flex justify-between">
                                 <span className="text-gray-600">AGB:</span>
-                                <span className="font-semibold">{calculationResults.startYear.carbonPools.agb.toFixed(2)} t/ha</span>
+                                <span className="font-semibold">{calculationResults.startYear.carbonPools.agb.toFixed(2)} t</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-gray-600">BGB:</span>
-                                <span className="font-semibold">{calculationResults.startYear.carbonPools.bgb.toFixed(2)} t/ha</span>
+                                <span className="font-semibold">{calculationResults.startYear.carbonPools.bgb.toFixed(2)} t</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-gray-600">SOC:</span>
-                                <span className="font-semibold">{calculationResults.startYear.carbonPools.soc.toFixed(2)} t/ha</span>
+                                <span className="font-semibold">{calculationResults.startYear.carbonPools.soc.toFixed(2)} t</span>
                               </div>
                               <div className="flex justify-between pt-2 border-t border-gray-200">
                                 <span className="text-gray-600 font-medium">Total Stock:</span>
@@ -716,15 +731,15 @@ export default function DashboardPage() {
                             <div className="space-y-2 text-sm">
                               <div className="flex justify-between">
                                 <span className="text-gray-600">AGB:</span>
-                                <span className="font-semibold">{calculationResults.endYear.carbonPools.agb.toFixed(2)} t/ha</span>
+                                <span className="font-semibold">{calculationResults.endYear.carbonPools.agb.toFixed(2)} t</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-gray-600">BGB:</span>
-                                <span className="font-semibold">{calculationResults.endYear.carbonPools.bgb.toFixed(2)} t/ha</span>
+                                <span className="font-semibold">{calculationResults.endYear.carbonPools.bgb.toFixed(2)} t</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-gray-600">SOC:</span>
-                                <span className="font-semibold">{calculationResults.endYear.carbonPools.soc.toFixed(2)} t/ha</span>
+                                <span className="font-semibold">{calculationResults.endYear.carbonPools.soc.toFixed(2)} t</span>
                               </div>
                               <div className="flex justify-between pt-2 border-t border-gray-200">
                                 <span className="text-gray-600 font-medium">Total Stock:</span>
@@ -742,13 +757,13 @@ export default function DashboardPage() {
                             <div>
                               <span className="text-green-700">AGB Change:</span>
                               <div className="font-bold text-green-600">
-                                {calculationResults.carbonChange.agbChange > 0 ? "+" : ""}{calculationResults.carbonChange.agbChange.toFixed(2)} t/ha
+                                {calculationResults.carbonChange.agbChange > 0 ? "+" : ""}{calculationResults.carbonChange.agbChange.toFixed(2)} t
                               </div>
                             </div>
                             <div>
                               <span className="text-green-700">SOC Change:</span>
                               <div className="font-bold text-green-600">
-                                {calculationResults.carbonChange.socChange > 0 ? "+" : ""}{calculationResults.carbonChange.socChange.toFixed(2)} t/ha
+                                {calculationResults.carbonChange.socChange > 0 ? "+" : ""}{calculationResults.carbonChange.socChange.toFixed(2)} t 
                               </div>
                             </div>
                             <div>
@@ -779,7 +794,7 @@ export default function DashboardPage() {
                         {calculationResults.startYear.carbonPools.agb_uncertainty && (
                           <div className="mt-4 p-3 bg-yellow-50 rounded border border-yellow-200">
                             <p className="text-xs text-yellow-700 font-semibold">
-                              ⚠️ Model Uncertainty (STD): {calculationResults.startYear.carbonPools.agb_uncertainty.toFixed(2)} t/ha
+                              ⚠️ Model Uncertainty (STD): {calculationResults.startYear.carbonPools.agb_uncertainty.toFixed(2)} t
                             </p>
                           </div>
                         )}

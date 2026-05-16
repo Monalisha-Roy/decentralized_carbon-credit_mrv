@@ -272,9 +272,9 @@ def predict_drone_agb_endpoint():
     Returns:
     {
         "success":         true,
-        "agb":             45.23,        // t/ha  (Above Ground Biomass)
-        "bgb":             9.05,         // t/ha  (Below Ground Biomass = AGB * 0.2)
-        "agb_uncertainty": 6.78,         // t/ha  (combined RF ensemble SD)
+        "agb":             45.23,        // tonnes  (Above Ground Biomass, total)
+        "bgb":             9.05,         // tonnes  (Below Ground Biomass = AGB * 0.2)
+        "agb_uncertainty": 6.78,         // tonnes  (combined RF ensemble SD)
         "tree_count":      312,
         "mean_crown_ft":   4.8,
         "mean_height_m":   12.3,
@@ -305,8 +305,8 @@ def predict_drone_agb_endpoint():
         )
 
         logger.info(
-            f"Drone AGB={result['agb']} t/ha  "
-            f"BGB={result['bgb']} t/ha  "
+            f"Drone AGB={result['agb']} t  "
+            f"BGB={result['bgb']} t  "
             f"Trees={result['tree_count']}"
         )
 
@@ -341,8 +341,8 @@ def predict_carbon_endpoint():
         if not valid:
             return jsonify({'success': False, 'error': f"AGB validation: {message}"}), 400
         sat_agb, sat_uncertainty = predict_agb(prepare_agb_features(agb_features))
-        results['satellite_agb']             = round(sat_agb, 2)
-        results['satellite_agb_uncertainty'] = round(sat_uncertainty, 2)
+        results['satellite_agb']             = round(sat_agb, 2)          # t/ha density
+        results['satellite_agb_uncertainty'] = round(sat_uncertainty, 2)  # t/ha density
 
         # SOC
         if 'soc_features' not in data:
@@ -351,44 +351,54 @@ def predict_carbon_endpoint():
         valid, message = validate_soc_features(soc_features)
         if not valid:
             return jsonify({'success': False, 'error': f"SOC validation: {message}"}), 400
-        soc = predict_soc(prepare_soc_features(soc_features))
-        results['soc'] = round(soc, 2)
+        soc_density = predict_soc(prepare_soc_features(soc_features))  # t/ha
+        results['soc_density'] = round(soc_density, 2)
 
-        # Drone AGB
+        # Drone AGB — already in tonnes (drone pipeline outputs total, not density)
         drone_agb         = float(data.get('drone_agb', 0.0))
         drone_uncertainty = float(data.get('drone_agb_uncertainty', 0.0))
         results['drone_agb']             = round(drone_agb, 2)
         results['drone_agb_uncertainty'] = round(drone_uncertainty, 2)
 
+        # Convert satellite density → tonnes before fusion
+        sat_agb_tonnes         = sat_agb * area_ha
+        sat_uncertainty_tonnes = sat_uncertainty * area_ha  # std scales linearly with area
+
         # ── Inverse Variance Weighting fusion via agb_fusion.py ──────────────
         if drone_agb > 0:
-            sat_estimate   = AGBEstimate(agb=sat_agb, std_dev=max(sat_uncertainty, 0.01), source="satellite")
-            drone_estimate = AGBEstimate(agb=drone_agb, std_dev=max(drone_uncertainty, 0.01), source="drone")
+            sat_estimate   = AGBEstimate(agb=sat_agb_tonnes, std_dev=max(sat_uncertainty_tonnes, 0.01), source="satellite")
+            drone_estimate = AGBEstimate(agb=drone_agb,      std_dev=max(drone_uncertainty, 0.01),      source="drone")
             fusion         = fuse_agb(sat_estimate, drone_estimate)
-            fused_agb         = fusion.agb_fused
+            fused_agb         = fusion.agb_fused  # tonnes
             fused_uncertainty = fusion.std_dev
-            results['weight_satellite'] = round(fusion.weight_sat, 4)
+            results['weight_satellite'] = round(fusion.weight_sat,   4)
             results['weight_drone']     = round(fusion.weight_drone, 4)
         else:
-            fused_agb         = sat_agb
-            fused_uncertainty = sat_uncertainty
+            # No drone data — fall back to satellite only, but still in tonnes
+            fused_agb         = sat_agb_tonnes
+            fused_uncertainty = sat_uncertainty_tonnes
 
+        # BGB from fused AGB (both in tonnes)
         bgb = fused_agb * 0.2
         results['fused_agb']         = round(fused_agb, 2)
         results['fused_uncertainty'] = round(fused_uncertainty, 2)
         results['bgb']               = round(bgb, 2)
 
-        # Final carbon stock
-        carbon_stock_t = (fused_agb + bgb + soc) * area_ha
+        # SOC: density → tonnes (separate from fusion, satellite-only)
+        soc_tonnes = soc_density * area_ha
+        results['soc_tonnes'] = round(soc_tonnes, 2)
+
+        # Carbon stock — all values already in tonnes, no * area_ha
+        carbon_stock_t = fused_agb + bgb + soc_tonnes
         co2_equivalent = carbon_stock_t * 3.67
         results['carbon_stock']   = round(carbon_stock_t, 2)
         results['co2_equivalent'] = round(co2_equivalent, 2)
         results['area_ha']        = round(area_ha, 4)
 
         logger.info(
-            f"Fusion — sat={sat_agb:.2f} drone={drone_agb:.2f} "
-            f"fused={fused_agb:.2f} SOC={soc:.2f} "
-            f"stock={carbon_stock_t:.2f}t CO2e={co2_equivalent:.2f}t"
+            f"Fusion — sat={sat_agb:.2f} t/ha drone={drone_agb:.2f} t "
+            f"fused={fused_agb:.2f} t SOC={soc_tonnes:.2f} t "
+            f"stock={carbon_stock_t:.2f} t CO2e={co2_equivalent:.2f} t"
         )
 
         return jsonify({'success': True, **results}), 200

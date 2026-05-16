@@ -652,7 +652,7 @@ async function getDroneAGBData(
   const result = await response.json();
   if (!result.success) throw new Error(result.error || 'Drone prediction failed');
 
-  console.log(`🚁 Drone AGB=${result.agb} t/ha BGB=${result.bgb} t/ha uncertainty=${result.agb_uncertainty}`);
+  console.log(`🚁 Drone AGB=${result.agb} t BGB=${result.bgb} t uncertainty=${result.agb_uncertainty} t`);
 
   return {
     agb: parseFloat(result.agb.toFixed(2)),
@@ -687,33 +687,34 @@ async function getCarbonDataForYear(
     } else {
       biomassData = await getBiomassData(geometry, year);
     }
-    console.log(`Biomass data [${agbSource}]: AGB=${biomassData.agb} t/ha, BGB=${biomassData.bgb} t/ha`);
+    console.log(`Biomass data [${agbSource}]: AGB=${biomassData.agb} t/ha density, BGB=${biomassData.bgb} t/ha density`);
 
     // Get SOC data using full year
     console.log(`Fetching SOC data...`);
     const soc = await getSOCData(geometry, year);
-    console.log(`SOC data: ${soc} t/ha`);
+    console.log(`SOC data: ${soc} t/ha density`);
 
     // Calculate total carbon density (t/ha) = AGB + BGB + SOC
     const carbonDensity = biomassData.agb + biomassData.bgb + soc;
 
-    // Calculate total carbon stock for the entire area (tonnes)
-    const totalCarbonStock = carbonDensity * totalAreaHa;
-
-    // Calculate CO2 equivalent (multiply by 3.67)
+    const agb_tonnes = biomassData.agb * totalAreaHa;
+    const bgb_tonnes = biomassData.bgb * totalAreaHa;
+    const soc_tonnes = soc * totalAreaHa;
+    const totalCarbonStock = agb_tonnes + bgb_tonnes + soc_tonnes;
     const co2Equivalent = totalCarbonStock * 3.67;
 
-    console.log(`Year ${year}: Carbon density=${carbonDensity.toFixed(2)} t/ha, Total=${totalCarbonStock.toFixed(2)} tonnes, CO2eq=${co2Equivalent.toFixed(2)} tonnes`);
+    console.log(`Year ${year}: AGB=${agb_tonnes.toFixed(2)} t BGB=${bgb_tonnes.toFixed(2)} t SOC=${soc_tonnes.toFixed(2)} t Total=${totalCarbonStock.toFixed(2)} t CO2e=${co2Equivalent.toFixed(2)} t`);
 
     return {
       year,
       totalAreaHa: parseFloat(totalAreaHa.toFixed(2)),
+
       carbonPools: {
-        agb: parseFloat(biomassData.agb.toFixed(2)),
-        bgb: parseFloat(biomassData.bgb.toFixed(2)),
-        soc: parseFloat(soc.toFixed(2)),
+        agb: parseFloat(agb_tonnes.toFixed(2)),
+        bgb: parseFloat(bgb_tonnes.toFixed(2)),
+        soc: parseFloat(soc_tonnes.toFixed(2)),
       },
-      totalCarbonDensity: parseFloat(carbonDensity.toFixed(2)),
+      totalCarbonDensity: parseFloat(carbonDensity.toFixed(2)),  // keep for reference
       totalCarbonStock: parseFloat(totalCarbonStock.toFixed(2)),
       co2Equivalent: parseFloat(co2Equivalent.toFixed(2)),
       agbSource,
@@ -829,72 +830,78 @@ export async function POST(request: NextRequest) {
     const previousCo2e = body.lastCarbonStockCo2e ?? 0;
 
     // If previous calculation exists, use on-chain data as startYear
-let startData;
-const hasPreviousCalc = lastCarbonStockCo2e && lastCarbonStockCo2e > 0;
+    let startData;
+    const hasPreviousCalc = lastCarbonStockCo2e && lastCarbonStockCo2e > 0;
 
-if (hasPreviousCalc) {
-  console.log(`♻️ Using on-chain previous record as startYear — skipping satellite fetch`);
-  const lastTotalDensity = (lastAgbDensity ?? 0) + (lastBgbDensity ?? 0) + (lastSocDensity ?? 0);
-  startData = {
-    year: startYear,
-    totalAreaHa: areaForCalculation,
-    carbonPools: {
-      agb: lastAgbDensity ?? 0,
-      bgb: lastBgbDensity ?? 0,
-      soc: lastSocDensity ?? 0,
-    },
-    totalCarbonDensity: lastTotalDensity,
-    totalCarbonStock: lastCarbonStockCo2e / 3.67,
-    co2Equivalent: lastCarbonStockCo2e,
-    agbSource: 'satellite' as const,
-  };
-} else {
-  console.log(`🛰️ First calculation — fetching startYear from satellite`);
-  startData = await getCarbonDataForYear(geometry, startYear, areaForCalculation);
-}
+    if (hasPreviousCalc) {
+      console.log(`♻️ Using on-chain previous record as startYear — skipping satellite fetch`);
 
-// ── Satellite pipeline for endYear first (no drone) ───────────────────────
-console.log(`🛰️ Fetching satellite data for endYear ${endYear}...`);
-const endDataSatellite = await getCarbonDataForYear(geometry, endYear, areaForCalculation);
+      const lastAgbTonnes = (lastAgbDensity ?? 0) * areaForCalculation;
+      const lastBgbTonnes = (lastBgbDensity ?? 0) * areaForCalculation;
+      const lastSocTonnes = (lastSocDensity ?? 0) * areaForCalculation;
+      const lastTotalDensity = (lastAgbDensity ?? 0) + (lastBgbDensity ?? 0) + (lastSocDensity ?? 0);
 
-  // ── Drone pipeline for endYear after satellite completes ──────────────────
-  let endData = endDataSatellite;
-  if (droneData?.orthomosaicCid && droneData?.chmCid) {
-    console.log(`🚁 Satellite complete — now starting drone pipeline for endYear ${endYear}...`);
-    try {
-      const droneResult = await getDroneAGBData(droneData.orthomosaicCid, droneData.chmCid);
-
-      // Fuse satellite AGB + drone AGB using inverse variance weighting
-      const satVar   = Math.max(endDataSatellite.carbonPools.agb * 0.1, 0.01) ** 2;
-      const droneVar = Math.max(droneResult.agb_uncertainty, 0.01) ** 2;
-      const wSat     = 1 / satVar;
-      const wDrone   = 1 / droneVar;
-      const fusedAgb = (wSat * endDataSatellite.carbonPools.agb + wDrone * droneResult.agb) / (wSat + wDrone);
-      const fusedBgb = fusedAgb * 0.2;
-
-      const fusedTotalDensity = fusedAgb + fusedBgb + endDataSatellite.carbonPools.soc;
-      const fusedStockTc      = fusedTotalDensity * areaForCalculation;
-      const fusedCo2e         = fusedStockTc * 3.67;
-
-      endData = {
-        ...endDataSatellite,
+      startData = {
+        year: startYear,
+        totalAreaHa: areaForCalculation,
         carbonPools: {
-          agb: parseFloat(fusedAgb.toFixed(2)),
-          bgb: parseFloat(fusedBgb.toFixed(2)),
-          soc: endDataSatellite.carbonPools.soc,
+          agb: parseFloat(lastAgbTonnes.toFixed(2)),
+          bgb: parseFloat(lastBgbTonnes.toFixed(2)),
+          soc: parseFloat(lastSocTonnes.toFixed(2)),
         },
-        totalCarbonDensity: parseFloat(fusedTotalDensity.toFixed(2)),
-        totalCarbonStock:   parseFloat(fusedStockTc.toFixed(2)),
-        co2Equivalent:      parseFloat(fusedCo2e.toFixed(2)),
-        agbSource: 'drone' as const,
+        totalCarbonDensity: parseFloat(lastTotalDensity.toFixed(2)),  // t/ha, kept for reference
+        totalCarbonStock: parseFloat((lastCarbonStockCo2e / 3.67).toFixed(2)),
+        co2Equivalent: lastCarbonStockCo2e,
+        agbSource: 'satellite' as const,
       };
-
-      console.log(`✅ Fusion complete — Sat AGB=${endDataSatellite.carbonPools.agb} Drone AGB=${droneResult.agb} Fused AGB=${fusedAgb.toFixed(2)}`);
-    } catch (droneErr: any) {
-      console.warn(`⚠️ Drone pipeline failed — falling back to satellite only: ${droneErr.message}`);
-      endData = endDataSatellite;
+    } else {
+      console.log(`🛰️ First calculation — fetching startYear from satellite`);
+      startData = await getCarbonDataForYear(geometry, startYear, areaForCalculation);
     }
-  }
+
+    // ── Satellite pipeline for endYear first (no drone) ───────────────────────
+    console.log(`🛰️ Fetching satellite data for endYear ${endYear}...`);
+    const endDataSatellite = await getCarbonDataForYear(geometry, endYear, areaForCalculation);
+
+    // ── Drone pipeline for endYear after satellite completes ──────────────────
+    let endData = endDataSatellite;
+    if (droneData?.orthomosaicCid && droneData?.chmCid) {
+      console.log(`🚁 Satellite complete — now starting drone pipeline for endYear ${endYear}...`);
+      try {
+        const droneResult = await getDroneAGBData(droneData.orthomosaicCid, droneData.chmCid);
+
+        // Fuse satellite AGB + drone AGB using inverse variance weighting
+        const satVar = Math.max(endDataSatellite.carbonPools.agb * 0.1, 0.01) ** 2;
+        const droneVar = Math.max(droneResult.agb_uncertainty, 0.01) ** 2;
+        const wSat = 1 / satVar;
+        const wDrone = 1 / droneVar;
+        const fusedAgb = (wSat * endDataSatellite.carbonPools.agb + wDrone * droneResult.agb) / (wSat + wDrone);
+        const fusedBgb = fusedAgb * 0.2;
+
+        const fusedStockTc = fusedAgb + fusedBgb + endDataSatellite.carbonPools.soc;
+        const fusedCo2e = fusedStockTc * 3.67;
+        // keep density for reference by dividing back
+        const fusedTotalDensity = fusedStockTc / areaForCalculation;
+
+        endData = {
+          ...endDataSatellite,
+          carbonPools: {
+            agb: parseFloat(fusedAgb.toFixed(2)),
+            bgb: parseFloat(fusedBgb.toFixed(2)),
+            soc: endDataSatellite.carbonPools.soc,   // already tonnes
+          },
+          totalCarbonDensity: parseFloat(fusedTotalDensity.toFixed(2)),  // t/ha, for reference
+          totalCarbonStock: parseFloat(fusedStockTc.toFixed(2)),
+          co2Equivalent: parseFloat(fusedCo2e.toFixed(2)),
+          agbSource: 'drone' as const,
+        };
+
+        console.log(`✅ Fusion complete — Sat AGB=${endDataSatellite.carbonPools.agb} t Drone AGB=${droneResult.agb} t Fused AGB=${fusedAgb.toFixed(2)} t`);
+      } catch (droneErr: any) {
+        console.warn(`⚠️ Drone pipeline failed — falling back to satellite only: ${droneErr.message}`);
+        endData = endDataSatellite;
+      }
+    }
 
     // Calculate time period
     const yearsDifference = endYear - startYear;

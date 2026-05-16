@@ -65,8 +65,8 @@ class AGBEstimate:
     Single AGB estimate with its uncertainty.
 
     Attributes:
-        agb     : Above-ground biomass density in t/ha
-        std_dev : Standard deviation (sigma) in t/ha
+        agb     : Above-ground biomass in tonnes
+        std_dev : Standard deviation (sigma) in tonnes
         source  : Label for logging (e.g. 'satellite', 'drone')
     """
     agb: float
@@ -113,12 +113,12 @@ class FusionResult:
     Output of the IVW fusion.
 
     Attributes:
-        agb_fused    : Fused AGB density (t/ha)
-        std_dev      : Fused uncertainty sigma_fused (t/ha)
+        agb_fused    : Fused AGB (tonnes)
+        std_dev      : Fused uncertainty sigma_fused (tonnes)
         weight_sat   : Fractional weight from satellite [0-1]
         weight_drone : Fractional weight from drone [0-1]
-        ci_lower     : Lower bound of 95% CI (t/ha)
-        ci_upper     : Upper bound of 95% CI (t/ha)
+        ci_lower     : Lower bound of 95% CI (tonnes)
+        ci_upper     : Upper bound of 95% CI (tonnes)
     """
     agb_fused: float
     std_dev: float
@@ -133,9 +133,9 @@ class FusionResult:
             f"  Fused AGB Result (Inverse Variance Weighting)\n"
             f"  Ref: Borenstein et al. (2009); Avitabile et al. (2016)\n"
             f"{'='*52}\n"
-            f"  AGB (fused)   : {self.agb_fused:.4f} t/ha\n"
-            f"  Uncertainty   : +/-{self.std_dev:.4f} t/ha\n"
-            f"  95% CI        : [{self.ci_lower:.4f}, {self.ci_upper:.4f}] t/ha\n"
+            f"  AGB (fused)   : {self.agb_fused:.4f} tonnes\n"
+            f"  Uncertainty   : +/-{self.std_dev:.4f} tonnes\n"
+            f"  95% CI        : [{self.ci_lower:.4f}, {self.ci_upper:.4f}] tonnes\n"
             f"{'─'*52}\n"
             f"  Weight (satellite) : {self.weight_sat*100:.1f}%\n"
             f"  Weight (drone)     : {self.weight_drone*100:.1f}%\n"
@@ -203,8 +203,8 @@ def fuse_agb(satellite: AGBEstimate, drone: AGBEstimate) -> FusionResult:
 # Example — plug in your model outputs here
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    sat   = AGBEstimate(agb=51.15, std_dev=37.25, source="satellite")
-    drone = AGBEstimate(agb=45.00, std_dev=10.00, source="drone")
+    sat   = AGBEstimate(agb=1200.0, std_dev=876.0, source="satellite")  # e.g. ~51 t/ha * 23 ha
+    drone = AGBEstimate(agb=1035.0, std_dev=230.0, source="drone")
 
     result = fuse_agb(sat, drone)
     print(result)

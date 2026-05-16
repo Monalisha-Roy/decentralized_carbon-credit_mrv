@@ -22,19 +22,19 @@ export async function POST(req: NextRequest) {
         { trait_type: "Area (ha)",          value: areaHectares },
         { trait_type: "Period",             value: `${startYear} → ${endYear}` },
         // Start year
-        { trait_type: "Start AGB (t/ha)",   value: startAgb },
-        { trait_type: "Start BGB (t/ha)",   value: startBgb },
-        { trait_type: "Start SOC (t/ha)",   value: startSoc },
+        { trait_type: "Start AGB (t)",   value: startAgb },
+        { trait_type: "Start BGB (t)",   value: startBgb },
+        { trait_type: "Start SOC (t)",   value: startSoc },
         { trait_type: "Start CO₂e Stock (t)", value: startCo2e },
         // End year
-        { trait_type: "End AGB (t/ha)",     value: endAgb },
-        { trait_type: "End BGB (t/ha)",     value: endBgb },
-        { trait_type: "End SOC (t/ha)",     value: endSoc },
+        { trait_type: "End AGB (t)",     value: endAgb },
+        { trait_type: "End BGB (t)",     value: endBgb },
+        { trait_type: "End SOC (t)",     value: endSoc },
         { trait_type: "End CO₂e Stock (t)", value: endCo2e },
         // Changes
-        { trait_type: "AGB Change (t/ha)",  value: agbChange },
-        { trait_type: "BGB Change (t/ha)",  value: bgbChange },
-        { trait_type: "SOC Change (t/ha)",  value: socChange },
+        { trait_type: "AGB Change (t)",  value: agbChange },
+        { trait_type: "BGB Change (t)",  value: bgbChange },
+        { trait_type: "SOC Change (t)",  value: socChange },
         { trait_type: "CO₂e Change (t)",    value: co2eChange },
         { trait_type: "Credits Allocated",  value: creditsAllocated },
         // Verification

@@ -26,17 +26,17 @@ export interface CarbonCalculationRequest {
 }
 
 export interface CarbonPoolData {
-  agb: number; // Above Ground Biomass (tonnes/ha)
-  bgb: number; // Below Ground Biomass (tonnes/ha)
-  soc: number; // Soil Organic Carbon (tonnes/ha)
+  agb: number; // Above Ground Biomass (tonnes)
+  bgb: number; // Below Ground Biomass (tonnes)
+  soc: number; // Soil Organic Carbon (tonnes)
 }
 
 export interface CarbonDataPoint {
   year: number;
   totalAreaHa: number;
   carbonPools: CarbonPoolData;
-  totalCarbonDensity: number; // Total carbon density (t/ha)
-  totalCarbonStock: number; // Total carbon stock in tonnes
+  totalCarbonDensity: number; // kept for on-chain storage reference (t/ha density)
+  totalCarbonStock: number;   // Total carbon stock in tonnes (AGB + BGB + SOC absolute)
   co2Equivalent: number; // CO2 equivalent in tonnes
   agbSource?: 'drone' | 'satellite'; // which source was used for AGB
 }
@@ -168,8 +168,8 @@ export async function calculateCarbonCredits(
 
     console.log('✅ Carbon calculation completed successfully');
     console.log(`   AGB source: ${data.data?.endYear.agbSource ?? 'satellite'}`);
-    console.log(`   AGB: ${data.data?.startYear.carbonPools.agb} t/ha`);
-    console.log(`   SOC: ${data.data?.startYear.carbonPools.soc} t/ha`);
+    console.log(`   AGB: ${data.data?.startYear.carbonPools.agb} t`);
+    console.log(`   SOC: ${data.data?.startYear.carbonPools.soc} t`);
     console.log(`   Total Carbon: ${data.data?.startYear.totalCarbonStock} tonnes`);
 
     return data;
@@ -188,9 +188,9 @@ export async function calculateCarbonCredits(
  */
 export function formatCarbonData(data: CarbonDataPoint): string {
   return `
-AGB: ${data.carbonPools.agb.toFixed(2)} t/ha
-BGB: ${data.carbonPools.bgb.toFixed(2)} t/ha
-SOC: ${data.carbonPools.soc.toFixed(2)} t/ha
+AGB: ${data.carbonPools.agb.toFixed(2)} t
+BGB: ${data.carbonPools.bgb.toFixed(2)} t
+SOC: ${data.carbonPools.soc.toFixed(2)} t
 Total Carbon Density: ${data.totalCarbonDensity.toFixed(2)} t/ha
 Total Carbon Stock: ${data.totalCarbonStock.toFixed(2)} tonnes
 CO₂ Equivalent: ${data.co2Equivalent.toFixed(2)} tonnes
